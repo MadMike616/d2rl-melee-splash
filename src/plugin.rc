@@ -10,8 +10,8 @@ IDR_MELEESPLASH_ITEM_MODIFIER_STRING RCDATA "assets/install/item-modifier-melee-
 IDR_MELEESPLASH_AFFIX_NAME_STRING RCDATA "assets/install/item-nameaffix-splashing.json"
 
 1 VERSIONINFO
-FILEVERSION 0,3,0,0
-PRODUCTVERSION 0,3,0,0
+FILEVERSION 0,3,1,0
+PRODUCTVERSION 0,3,1,0
 BEGIN
   BLOCK "StringFileInfo"
   BEGIN
@@ -19,11 +19,11 @@ BEGIN
     BEGIN
       VALUE "CompanyName", "MadMike"
       VALUE "FileDescription", "Melee splash damage for D2RLoader"
-      VALUE "FileVersion", "0.3.0"
+      VALUE "FileVersion", "0.3.1"
       VALUE "InternalName", "d2rl-melee-splash"
       VALUE "OriginalFilename", "d2rl-melee-splash.dll"
       VALUE "ProductName", "Melee Splash"
-      VALUE "ProductVersion", "0.3.0"
+      VALUE "ProductVersion", "0.3.1"
     END
   END
   BLOCK "VarFileInfo"

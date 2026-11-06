@@ -113,6 +113,30 @@ auto ReadText(const fs::path& path) -> std::string {
 	return BytesToString(ReadFile(path));
 }
 
+auto ReadTextOrCascBase(const fs::path& path, const fs::path& cascBasePath) -> std::string {
+	std::error_code error;
+	const bool exists = fs::exists(path, error);
+	if (error) {
+		throw std::runtime_error("could not inspect an installation target");
+	}
+	if (exists) {
+		if (!fs::is_regular_file(path, error) || error) {
+			throw std::runtime_error("an installation target exists but is not a regular file");
+		}
+		return ReadText(path);
+	}
+	const bool baseExists = fs::exists(cascBasePath, error);
+	if (error || !baseExists) {
+		throw std::runtime_error(
+			"missing CASC-extracted base file: " + cascBasePath.filename().string());
+	}
+	if (!fs::is_regular_file(cascBasePath, error) || error) {
+		throw std::runtime_error(
+			"CASC-extracted base path is not a regular file: " + cascBasePath.filename().string());
+	}
+	return ReadText(cascBasePath);
+}
+
 auto SplitLines(std::string_view text) -> std::vector<std::string> {
 	std::vector<std::string> lines;
 	std::size_t start = 0;
@@ -557,9 +581,15 @@ auto MergeLocalizedJson(
 	if (!found) {
 		throw std::runtime_error("a localization file has no free string ID");
 	}
-	const std::regex zeroId(R"REGEX(("id"\s*:\s*)0)REGEX");
-	addition = std::regex_replace(addition, zeroId, "$1" + std::to_string(candidate),
-		std::regex_constants::format_first_only);
+	const std::regex zeroId(R"REGEX("id"\s*:\s*0(?!\d))REGEX");
+	std::smatch zeroIdMatch;
+	if (JsonNumericProperty(addition, "id") != std::optional<std::uint32_t>(0)
+		|| !std::regex_search(addition, zeroIdMatch, zeroId)) {
+		throw std::runtime_error("an embedded localization template has no zero string ID");
+	}
+	const auto zeroPosition = static_cast<std::size_t>(
+		zeroIdMatch.position() + zeroIdMatch.length() - 1);
+	addition.replace(zeroPosition, 1, std::to_string(candidate));
 
 	const auto arrayOpen = existing.find('[', first);
 	const auto innerStart = arrayOpen + 1;
@@ -610,7 +640,16 @@ auto FindActiveModRoot(const D2RL::PluginContext* context) -> fs::path {
 		candidates.push_back(scopeRoot / L"mods" / activeMod / packageName);
 		addBase(scopeRoot);
 	}
+	constexpr std::array<const wchar_t*, 5> targets{
+		L"data/global/excel/itemstatcost.txt",
+		L"data/global/excel/properties.txt",
+		L"data/global/excel/magicsuffix.txt",
+		L"data/local/lng/strings/item-modifiers.json",
+		L"data/local/lng/strings/item-nameaffixes.json",
+	};
 	std::set<std::wstring> seen;
+	std::optional<fs::path> bestCandidate;
+	std::size_t bestFileCount = 0;
 	for (const auto& candidate : candidates) {
 		const auto normalized = candidate.lexically_normal();
 		if (!seen.insert(normalized.native()).second) {
@@ -621,18 +660,31 @@ auto FindActiveModRoot(const D2RL::PluginContext* context) -> fs::path {
 			continue;
 		}
 		std::error_code error;
-		const auto hasFile = [&](const wchar_t* relative) {
-			return fs::is_regular_file(normalized / relative, error) && !error;
-		};
-		if (hasFile(L"data/global/excel/itemstatcost.txt")
-			&& hasFile(L"data/global/excel/properties.txt")
-			&& hasFile(L"data/global/excel/magicsuffix.txt")
-			&& hasFile(L"data/local/lng/strings/item-modifiers.json")
-			&& hasFile(L"data/local/lng/strings/item-nameaffixes.json")) {
+		if (!fs::is_directory(normalized, error) || error) {
+			continue;
+		}
+		std::size_t fileCount = 0;
+		for (const auto* relative : targets) {
+			const auto target = normalized / relative;
+			error.clear();
+			if (fs::exists(target, error) && !error
+				&& fs::is_regular_file(target, error) && !error) {
+				++fileCount;
+			}
+			if (error) {
+				fileCount = 0;
+				break;
+			}
+		}
+		if (!bestCandidate.has_value() || fileCount > bestFileCount) {
+			bestCandidate = normalized;
+			bestFileCount = fileCount;
+		}
+		if (fileCount == targets.size()) {
 			return normalized;
 		}
 	}
-	return {};
+	return bestCandidate.value_or(fs::path{});
 }
 
 auto Timestamp() -> std::wstring {
@@ -720,7 +772,7 @@ auto Install(const D2RL::PluginContext* context) -> std::int32_t {
 
 	const auto modRoot = FindActiveModRoot(context);
 	if (modRoot.empty()) {
-		throw std::runtime_error("could not resolve the active mod's required data files");
+		throw std::runtime_error("could not resolve the active mod directory");
 	}
 	FirstRunInstallLock installLock;
 	if (const auto statId = MarkerStatId(markerPath); statId.has_value()) {
@@ -733,14 +785,20 @@ auto Install(const D2RL::PluginContext* context) -> std::int32_t {
 	const auto suffixRelative = fs::path(L"data/global/excel/magicsuffix.txt");
 	const auto modifierStringsRelative = fs::path(L"data/local/lng/strings/item-modifiers.json");
 	const auto affixStringsRelative = fs::path(L"data/local/lng/strings/item-nameaffixes.json");
-	const auto [mergedStatCost, statId] = MergeItemStatCost(ReadText(modRoot / statCostRelative));
-	const auto [mergedProperties, propertyId] = MergeProperties(ReadText(modRoot / propertiesRelative));
-	const auto mergedSuffixes = MergeMagicSuffix(ReadText(modRoot / suffixRelative));
+	const auto cascBaseDirectory = configDirectory / L"d2rl-melee-splash" / L"base";
+	const auto [mergedStatCost, statId] = MergeItemStatCost(
+		ReadTextOrCascBase(modRoot / statCostRelative, cascBaseDirectory / L"itemstatcost.txt"));
+	const auto [mergedProperties, propertyId] = MergeProperties(
+		ReadTextOrCascBase(modRoot / propertiesRelative, cascBaseDirectory / L"properties.txt"));
+	const auto mergedSuffixes = MergeMagicSuffix(
+		ReadTextOrCascBase(modRoot / suffixRelative, cascBaseDirectory / L"magicsuffix.txt"));
 	const auto mergedModifierStrings = MergeLocalizedJson(
-		ReadText(modRoot / modifierStringsRelative), IDR_MELEESPLASH_ITEM_MODIFIER_STRING,
+		ReadTextOrCascBase(modRoot / modifierStringsRelative, cascBaseDirectory / L"item-modifiers.json"),
+		IDR_MELEESPLASH_ITEM_MODIFIER_STRING,
 		ModifierStringKey, ModifierString);
 	const auto mergedAffixStrings = MergeLocalizedJson(
-		ReadText(modRoot / affixStringsRelative), IDR_MELEESPLASH_AFFIX_NAME_STRING,
+		ReadTextOrCascBase(modRoot / affixStringsRelative, cascBaseDirectory / L"item-nameaffixes.json"),
+		IDR_MELEESPLASH_AFFIX_NAME_STRING,
 		SuffixName, SuffixString);
 
 	std::map<fs::path, Bytes> desired;
@@ -760,14 +818,20 @@ auto Install(const D2RL::PluginContext* context) -> std::int32_t {
 	if (error) {
 		throw std::runtime_error("could not create a first-run backup directory");
 	}
+	std::vector<fs::path> createdFromBase;
 	for (const auto& [relative, bytes] : desired) {
 		(void)bytes;
 		const auto original = modRoot / relative;
-		if (!fs::exists(original, error) || error) {
-			throw std::runtime_error("a required installation target does not exist");
+		const bool exists = fs::exists(original, error);
+		if (error) {
+			throw std::runtime_error("could not inspect an installation target before backup");
+		}
+		if (!exists) {
+			createdFromBase.push_back(relative);
+			continue;
 		}
 		if (!fs::is_regular_file(original, error) || error) {
-			throw std::runtime_error("a required installation target is not a regular file");
+			throw std::runtime_error("an installation target is not a regular file");
 		}
 		const auto backup = backupRoot / relative;
 		fs::create_directories(backup.parent_path(), error);
@@ -775,11 +839,28 @@ auto Install(const D2RL::PluginContext* context) -> std::int32_t {
 			throw std::runtime_error("a first-run backup file could not be created; mod files were not changed");
 		}
 	}
+	if (!createdFromBase.empty()) {
+		std::string manifest = "These target files were absent and were created from player-supplied CASC base files:\n";
+		for (const auto& relative : createdFromBase) {
+			manifest += relative.generic_string();
+			manifest += '\n';
+		}
+		WriteAtomic(backupRoot / L"created-from-casc-base.txt", StringToBytes(manifest));
+	}
 
 	std::size_t changedFiles = 0;
+	std::size_t createdFiles = 0;
 	for (const auto& [relative, bytes] : desired) {
 		const auto target = modRoot / relative;
-		if (ReadFile(target) != bytes) {
+		std::error_code targetError;
+		const bool exists = fs::exists(target, targetError);
+		if (targetError) {
+			throw std::runtime_error("could not inspect an installation target before writing");
+		}
+		if (!exists || ReadFile(target) != bytes) {
+			if (!exists) {
+				++createdFiles;
+			}
 			WriteAtomic(target, bytes);
 			++changedFiles;
 		}
@@ -788,14 +869,14 @@ auto Install(const D2RL::PluginContext* context) -> std::int32_t {
 	const std::string marker =
 		"[installation]\n"
 		"complete = true\n"
-		"plugin_version = \"0.3.0\"\n"
+		"plugin_version = \"0.3.1\"\n"
 		"stat_id = " + std::to_string(statId) + "\n"
 		"property_id = " + std::to_string(propertyId) + "\n";
 	WriteAtomic(markerPath, StringToBytes(marker));
 	char message[256]{};
 	std::snprintf(message, sizeof(message),
-		"Melee Splash: first-run install completed; %zu data files updated, backup created, stat_id=%d.",
-		changedFiles, statId);
+		"Melee Splash: first-run install completed; %zu data files updated, %zu created from supplied CASC base files, backup created, stat_id=%d.",
+		changedFiles, createdFiles, statId);
 	context->LogInfo(message);
 	return statId;
 }
