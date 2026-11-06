@@ -14,6 +14,8 @@ D2RLoader plugin that adds configurable melee splash damage to Diablo II: Resurr
 
 Requires D2RLoader with Plugin ABI 4 support. Put `d2rl-melee-splash.dll` in the active mod's `d2rloader/plugins` folder, then launch the game through D2RLoader. The active mod's data files must be writable for the one-time installer to run.
 
+After the first-run install completes, exit and restart D2RLoader before testing the mod. The restart lets the game load the newly created or edited data files; launch the mod again after restarting.
+
 On first load, the plugin backs up and merges only these five files:
 
 - `data/global/excel/itemstatcost.txt`
@@ -21,6 +23,8 @@ On first load, the plugin backs up and merges only these five files:
 - `data/global/excel/magicsuffix.txt`
 - `data/local/lng/strings/item-modifiers.json`
 - `data/local/lng/strings/item-nameaffixes.json`
+
+If one of these files is absent, the DLL creates it from an embedded base copy, then applies the splash rows. Existing files are backed up before editing. The backup folder includes `created-from-embedded-base.txt` listing any targets that were absent.
 
 The installer selects an unused stat ID, preferring 398, and an unused property ID, preferring 314. It adds the stat/property rows, localized tooltip and suffix strings, and the charm suffix rows: small charms roll 1–3%, large charms 2–6%, and grand charms 3–9%. It does not edit unique, set, or other item assignment tables; assign the property to other items in your mod's item data files if desired.
 
