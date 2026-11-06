@@ -1,0 +1,4 @@
+Name	version	spawnable	rare	level	maxlevel	levelreq	classspecific	class	classlevelreq	frequency	group	mod1code	mod1param	mod1min	mod1max	mod2code	mod2param	mod2min	mod2max	mod3code	mod3param	mod3min	mod3max	transformcolor	itype1	itype2	itype3	itype4	itype5	itype6	itype7	etype1	etype2	etype3	etype4	etype5	multiply	add
+of Splashing	100	1	1	1		1				4	401	meleesplash		1	3										scha												0	0
+of Splashing	100	1	1	1		1				4	401	meleesplash		2	6										mcha												0	0
+of Splashing	100	1	1	1		1				4	401	meleesplash		3	9										lcha												0	0

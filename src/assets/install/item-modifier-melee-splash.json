@@ -1,0 +1,17 @@
+  {
+    "id": 0,
+    "Key": "D2RLMeleeSplashDamage",
+    "enUS": "%d%% melee splash damage",
+    "zhTW": "%d%% 近戰濺射傷害",
+    "deDE": "%d%% Nahkampf-Flächenschaden",
+    "esES": "%d%% de daño de área cuerpo a cuerpo",
+    "frFR": "%d%% de dégâts de zone au corps à corps",
+    "itIT": "%d%% danni ad area in mischia",
+    "koKR": "근접 광역 피해 %d%%",
+    "plPL": "%d%% obrażeń obszarowych w walce wręcz",
+    "esMX": "%d%% de daño de área cuerpo a cuerpo",
+    "jaJP": "%d%% 近接範囲ダメージ",
+    "ptBR": "%d%% de dano em área corpo a corpo",
+    "ruRU": "%d%% урона по области в ближнем бою",
+    "zhCN": "%d%% 近战范围伤害"
+  }

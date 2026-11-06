@@ -1,0 +1,2 @@
+code	*Id	*Enabled	func1	stat1	set1	val1	func2	stat2	set2	val2	func3	stat3	set3	val3	func4	stat4	set4	val4	func5	stat5	set5	val5	func6	stat6	set6	val6	func7	stat7	set7	val7	uiRangeType	*Tooltip	*Parameter	*Min	*Max	*Notes	*eol
+meleesplash	314	1	1	item_melee_splash																											7	#%% melee splash damage	Skill	Min #	Max #	Melee splash percentage stat; item values can be assigned from 1 to 100.	0

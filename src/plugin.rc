@@ -1,0 +1,33 @@
+#include <D2RLPlugin/resource.h>
+#include <D2RLPlugin/version.h>
+#include "install_resource_ids.h"
+
+D2RL_PLUGIN_MANIFEST_RESOURCE_ID RCDATA { D2RL_PLUGIN_RESOURCE_DWORD(D2RL_PLUGIN_ABI_VERSION) }
+IDR_MELEESPLASH_ITEMSTATCOST RCDATA "assets/install/itemstatcost-melee-splash.tsv"
+IDR_MELEESPLASH_PROPERTIES RCDATA "assets/install/properties-melee-splash.tsv"
+IDR_MELEESPLASH_MAGICSUFFIX RCDATA "assets/install/magicsuffix-melee-splash.tsv"
+IDR_MELEESPLASH_ITEM_MODIFIER_STRING RCDATA "assets/install/item-modifier-melee-splash.json"
+IDR_MELEESPLASH_AFFIX_NAME_STRING RCDATA "assets/install/item-nameaffix-splashing.json"
+
+1 VERSIONINFO
+FILEVERSION 0,3,0,0
+PRODUCTVERSION 0,3,0,0
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "MadMike"
+      VALUE "FileDescription", "Melee splash damage for D2RLoader"
+      VALUE "FileVersion", "0.3.0"
+      VALUE "InternalName", "d2rl-melee-splash"
+      VALUE "OriginalFilename", "d2rl-melee-splash.dll"
+      VALUE "ProductName", "Melee Splash"
+      VALUE "ProductVersion", "0.3.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x0409, 1200
+  END
+END

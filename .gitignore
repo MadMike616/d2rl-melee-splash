@@ -1,0 +1,8 @@
+/.vs/
+/build/
+/out/
+*.exp
+*.lib
+*.obj
+*.pdb
+*.res
