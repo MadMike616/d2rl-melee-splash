@@ -27,3 +27,12 @@ After the first-run installer finishes, exit and restart D2RLoader so the game l
 - The installer still selects unused stat and property IDs, preferring 398 and 314.
 - It still adds the splash stat strings and suffix rows for small (1–3%), large (2–6%), and grand (3–9%) charms.
 - It does not edit item assignment tables.
+
+## Install
+
+Requires Windows x64 and D2RLoader with Plugin ABI 4 support. Put `d2rl-melee-splash.dll` in the active mod's `d2rloader/plugins` folder. After the first-run installer finishes, exit and restart D2RLoader so the game loads the new or edited files.
+
+## SHA-256
+
+`6DC7AE662FD7CCB2CA3662E59CDA32A32A8C42D3EE65277300287B72BC5B100B`
+
