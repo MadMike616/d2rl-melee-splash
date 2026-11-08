@@ -2607,7 +2607,7 @@ auto Status(
         std::snprintf(
             message,
             sizeof(message),
-        "Melee Splash 0.3.6: enabled=%s operational=%s partial=%s config=%s "
+        "Melee Splash 0.3.7: enabled=%s operational=%s partial=%s config=%s "
             "captures=%llu bursts=%llu secondaryHits=%llu rejectedHits=%llu "
             "rejectedTargets=%llu droppedSidecars=%llu.",
             ActiveConfig.enabled ? "true" : "false",
@@ -2624,7 +2624,7 @@ auto Status(
         command->plugin->WriteConsoleMessage(message);
     } catch (...) {
         command->plugin->WriteConsoleMessage(
-            "Melee Splash 0.3.6: status unavailable (allocation failure).");
+            "Melee Splash 0.3.7: status unavailable (allocation failure).");
     }
     return D2RL::ConsoleCommandResult::Handled;
 }
@@ -2668,7 +2668,7 @@ constexpr D2RL::PluginInfo Info{
     .abiVersion = D2RL_PLUGIN_ABI_VERSION,
     .id = "d2rl-melee-splash",
     .name = "Melee Splash",
-    .version = "0.3.6",
+    .version = "0.3.7",
     .author = "MadMike",
     .description = "Adds configurable melee splash damage to nearby monsters.",
     .flags = D2RL::PluginFlags::Server
@@ -2701,7 +2701,7 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(
     }
     if (!ActiveConfig.enabled) {
         Context->LogInfo(
-            "Melee Splash 0.3.6 loaded disabled; no hooks installed.");
+            "Melee Splash 0.3.7 loaded disabled; no hooks installed.");
         if (!Context->RegisterConsoleCommand(
                 "melee-splash", Status, "Show Melee Splash status.")) {
             Context->LogWarn(
@@ -2747,13 +2747,13 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(
         std::snprintf(
             message,
             sizeof(message),
-            "Melee Splash 0.3.6 by MadMike active; stat=%d config=%s.",
+            "Melee Splash 0.3.7 by MadMike active; stat=%d config=%s.",
             ActiveConfig.splashDamagePercentStatId,
             path.c_str());
         Context->LogInfo(message);
     } catch (...) {
         Context->LogInfo(
-            "Melee Splash 0.3.6 by MadMike active; config path unavailable.");
+            "Melee Splash 0.3.7 by MadMike active; config path unavailable.");
     }
     return true;
 }

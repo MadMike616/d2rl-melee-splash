@@ -82,7 +82,7 @@ The `melee-splash` status command reports counters and hook state. Loader logs r
 
 ## Build
 
-Use D2RLoader PluginSDK 0.4.0 / Plugin ABI 4, Windows x64, and an x64 Visual Studio Developer Command Prompt. Run `build-plugin.cmd <path-to-PluginSDK-SDK-0.4.0>` from the repository; the script writes build output under the system temporary directory. The SDK is available from the [official PluginSDK repository](https://github.com/D2RLoader/PluginSDK).
+Use D2RLoader PluginSDK 0.4.0 / Plugin ABI 4, Windows x64, and an x64 Visual Studio Developer Command Prompt. Run `build-plugin.cmd <path-to-PluginSDK-SDK-0.4.0>` from the repository; it builds with MSVC Release optimization (`/O2 /Ob2 /DNDEBUG`), the static release runtime (`/MT`), and linker optimizations, without debug information. Build output goes under the system temporary directory. The SDK is available from the [official PluginSDK repository](https://github.com/D2RLoader/PluginSDK).
 
 ## Third-party source
 

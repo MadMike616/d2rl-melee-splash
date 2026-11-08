@@ -873,7 +873,7 @@ auto Install(const D2RL::PluginContext* context) -> std::int32_t {
 	std::string marker =
 		"[installation]\n"
 		"complete = true\n"
-		"plugin_version = \"0.3.6\"\n"
+		"plugin_version = \"0.3.7\"\n"
 		"stat_id = " + std::to_string(statId) + "\n"
 		"property_id = " + std::to_string(propertyId) + "\n"
 		"\n[melee_splash]\n"
