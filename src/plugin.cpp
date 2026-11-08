@@ -18,6 +18,8 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -139,6 +141,11 @@ constexpr std::uintptr_t RollLimitedRandomRva = 0x153B00;
 constexpr std::uintptr_t GetWeaponMasteryChanceRva = 0x33D4F0;
 constexpr std::uintptr_t GetPathXRva = 0x341A20;
 constexpr std::uintptr_t GetPathYRva = 0x341A30;
+constexpr std::uintptr_t PlayerSkillPositionInputRva = 0x4FDB40;
+constexpr std::uintptr_t PlayerSkillUnitInputRva = 0x4F8DE0;
+constexpr std::uintptr_t ActiveSkillLayoutWitnessRva = 0x33DBA0;
+constexpr std::uint64_t RecentSkillInputLifetimeMs = 5000;
+constexpr std::size_t MaximumRecentSkillInputs = 128;
 
 constexpr std::uintptr_t DirectMeleeFillContextRva = 0x43009E;
 constexpr std::uintptr_t DirectMeleeFillReturnRva = 0x4300BB;
@@ -150,6 +157,19 @@ constexpr std::uintptr_t PreEvent3ReturnRva = 0x44CBA3;
 constexpr auto FillExpected = std::to_array<std::uint8_t>({
     0x40,0x56,0x57,0x41,0x54,0x48,0x81,0xEC,0x10,0x05,0x00,0x00,0x48,0x8B,0x05,
     0x85,0xF2,0x57,0x02,0x48,0x33,0xC4,0x48,0x89,0x84,0x24,0xD0,0x04,0x00,0x00,
+});
+constexpr auto PlayerSkillPositionInputExpected = std::to_array<std::uint8_t>({
+    0x48,0x89,0x5C,0x24,0x08,0x48,0x89,0x6C,0x24,0x10,0x48,0x89,0x74,0x24,0x18,
+    0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x83,0xEC,0x50,0x48,0x8B,
+    0xB4,0x24,0xA8,0x00,0x00,0x00,
+});
+constexpr auto PlayerSkillUnitInputExpected = std::to_array<std::uint8_t>({
+    0x40,0x55,0x53,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x8D,
+    0xAC,0x24,0x28,0xFE,0xFF,0xFF,0x48,0x81,0xEC,0xD8,0x02,0x00,0x00,
+});
+constexpr auto ActiveSkillLayoutWitnessExpected = std::to_array<std::uint8_t>({
+    0x48,0x85,0xC9,0x74,0x0E,0x48,0x8B,0x01,0x66,0x83,0x38,0x00,0xB8,0xFF,0xFF,
+    0xFF,0xFF,0x75,0x03,0x8B,0x41,0x30,0xC3,0xCC,
 });
 constexpr auto DirectMeleeFillContextExpected = std::to_array<std::uint8_t>({
     0x4C,0x8D,0x4C,0x24,0x70,0xC6,0x44,0x24,0x28,0x80,0x4C,0x8B,0xC3,0x44,0x89,
@@ -278,6 +298,11 @@ using RollLimitedRandomFn = std::uint32_t(__fastcall*)(
 using GetWeaponMasteryChanceFn = std::int32_t(__fastcall*)(
     void*, void*, std::int32_t, std::int32_t) noexcept;
 using GetPathCoordinateFn = std::uint16_t(__fastcall*)(void*) noexcept;
+using PlayerSkillPositionInputFn = std::int32_t(__fastcall*)(
+    void*, void*, std::int32_t, std::int32_t, std::int32_t, void*) noexcept;
+using PlayerSkillUnitInputFn = std::int32_t(__fastcall*)(
+    void*, void*, std::int32_t, std::int32_t, void*, std::int32_t,
+    std::int32_t) noexcept;
 
 const D2RL::PluginContext* Context{};
 std::uint8_t* Base{};
@@ -296,6 +321,8 @@ EventFunctionFn OriginalEvent16{};
 EventFunctionFn OriginalEvent19{};
 EventFunctionFn OriginalEvent20{};
 EventFunctionFn OriginalEvent21{};
+PlayerSkillPositionInputFn OriginalPlayerSkillPositionInput{};
+PlayerSkillUnitInputFn OriginalPlayerSkillUnitInput{};
 
 ApplyDamageBonusesFn ApplyDamageBonuses{};
 ApplyDamageEventFn ApplyDamageEvent{};
@@ -330,10 +357,24 @@ std::atomic<std::uint64_t> RejectedHits{};
 std::atomic<std::uint64_t> RejectedTargets{};
 std::atomic<std::uint64_t> DroppedSidecars{};
 std::atomic<std::uint32_t> FillDiagnosticLines{};
+std::atomic<std::uint32_t> SkillPolicyDiagnosticLines{};
+std::atomic<std::uint32_t> SkillInputDiagnosticLines{};
 std::atomic<const BKVCombatInterop::ApiV1*> BKVCombatApi{};
 std::atomic<bool> BKVCombatIncompatibleLogged{};
 
 constexpr std::uint32_t MaximumFillDiagnosticLines = 64;
+
+struct RecentSkillInput {
+    void* game{};
+    UnitIdentity attacker{};
+    UnitIdentity target{};
+    std::int32_t skillId{};
+    std::uint64_t observedAtMs{};
+    bool hasTarget{};
+};
+
+std::mutex RecentSkillInputsMutex;
+std::vector<RecentSkillInput> RecentSkillInputs;
 
 void* RelayPage{};
 constexpr std::size_t RelayStride = 16;
@@ -595,6 +636,93 @@ auto SkillIdFromActualHit(void* attacker) noexcept -> std::int32_t {
         Read<std::int16_t>(record, SkillsIdOffset));
 }
 
+auto SkillIdFromActiveInput(void* activeSkill) noexcept -> std::int32_t {
+    if (!activeSkill) return -1;
+    const auto* skill = Read<void*>(activeSkill, SkillRecordOffset);
+    if (!skill) return -1;
+    return static_cast<std::int32_t>(Read<std::uint16_t>(skill, SkillsIdOffset));
+}
+
+void RememberSkillInput(
+        void* game,
+        void* attacker,
+        std::int32_t skillId,
+        UnitIdentity target,
+        bool hasTarget) noexcept {
+    if (!game || !attacker || Identity(attacker).type != UnitPlayer) return;
+    try {
+        const auto attackerId = Identity(attacker);
+        const auto now = static_cast<std::uint64_t>(GetTickCount64());
+        std::scoped_lock lock(RecentSkillInputsMutex);
+        std::erase_if(RecentSkillInputs, [game, attackerId](const auto& entry) {
+            return entry.game == game && entry.attacker == attackerId;
+        });
+        if (RecentSkillInputs.size() >= MaximumRecentSkillInputs) {
+            RecentSkillInputs.erase(RecentSkillInputs.begin());
+        }
+        RecentSkillInputs.push_back({
+            .game = game,
+            .attacker = attackerId,
+            .target = target,
+            .skillId = skillId < 0 ? NormalAttackSkillId : skillId,
+            .observedAtMs = now,
+            .hasTarget = hasTarget,
+        });
+        if (SkillInputDiagnosticLines.fetch_add(
+                    1, std::memory_order_relaxed) < MaximumFillDiagnosticLines) {
+            DiagnosticLog(
+                "MeleeSplash skill input skill=%d target=%s%d/%u.",
+                skillId < 0 ? NormalAttackSkillId : skillId,
+                hasTarget ? "unit:" : "position:",
+                hasTarget ? target.type : 0,
+                hasTarget ? target.guid : 0);
+        }
+    } catch (...) {
+        DiagnosticLog("MeleeSplash skill input context could not be stored.");
+    }
+}
+
+auto RecentSkillIdForHit(
+        void* game, UnitIdentity attacker, UnitIdentity primary)
+        noexcept -> std::optional<std::int32_t> {
+    const auto now = static_cast<std::uint64_t>(GetTickCount64());
+    try {
+        std::scoped_lock lock(RecentSkillInputsMutex);
+        std::erase_if(RecentSkillInputs, [now](const auto& entry) {
+            return now < entry.observedAtMs
+                || now - entry.observedAtMs > RecentSkillInputLifetimeMs;
+        });
+        for (auto entry = RecentSkillInputs.rbegin();
+                entry != RecentSkillInputs.rend(); ++entry) {
+            if (entry->game != game || entry->attacker != attacker
+                    || (entry->hasTarget && entry->target != primary)) {
+                continue;
+            }
+            return entry->skillId;
+        }
+    } catch (...) {
+    }
+    return std::nullopt;
+}
+
+struct SkillIdResolution {
+    std::int32_t id{};
+    const char* source{};
+};
+
+auto ResolveSkillIdFromActualHit(
+        void* game, void* attacker, void* primary) noexcept -> SkillIdResolution {
+    const auto nativeSkillId = SkillIdFromActualHit(attacker);
+    if (nativeSkillId != NormalAttackSkillId) {
+        return {.id = nativeSkillId, .source = "native"};
+    }
+    if (const auto inputSkillId = RecentSkillIdForHit(
+            game, Identity(attacker), Identity(primary))) {
+        return {.id = *inputSkillId, .source = "input"};
+    }
+    return {.id = nativeSkillId, .source = "native"};
+}
+
 auto IsExceptionalOrEliteWeapon(void* weapon) noexcept -> bool {
     if (!weapon || !GetDataContextFromUnit || !GetItemsRecord) {
         return false;
@@ -607,14 +735,31 @@ auto IsExceptionalOrEliteWeapon(void* weapon) noexcept -> bool {
 }
 
 auto BuildMetadata(
-        void* attacker, void* primary, std::int32_t damageMode)
+        void* game,
+        void* attacker,
+        void* primary,
+        std::int32_t damageMode)
         -> std::unique_ptr<CaptureMetadata> {
     if (!attacker || !primary || Identity(attacker).type != UnitPlayer
             || Identity(primary).type != UnitMonster) {
         return {};
     }
-    const auto skillId = SkillIdFromActualHit(attacker);
-    if (!IsSkillEnabled(ActiveConfig, skillId)) return {};
+    const auto skillResolution = ResolveSkillIdFromActualHit(
+        game, attacker, primary);
+    const auto skillId = skillResolution.id;
+    const auto skillEnabled = IsSkillEnabled(ActiveConfig, skillId);
+    const auto logSkillPolicy = SkillPolicyDiagnosticLines.fetch_add(
+        1, std::memory_order_relaxed) < MaximumFillDiagnosticLines;
+    if (logSkillPolicy) {
+        DiagnosticLog(
+            "MeleeSplash skill policy skill=%d source=%s enabled=%s mode=%s.",
+            skillId,
+            skillResolution.source,
+            skillEnabled ? "true" : "false",
+            ActiveConfig.activationMode == ActivationMode::Whitelist
+                ? "whitelist" : "all");
+    }
+    if (!skillEnabled) return {};
 
     auto metadata = std::make_unique<CaptureMetadata>();
     metadata->attacker = Identity(attacker);
@@ -666,6 +811,16 @@ auto BuildMetadata(
         metadata->radiusBonusTiles = 0;
         metadata->radiusTiles = charmTier->radiusTiles;
         metadata->splashPercent = charmTier->damagePercent;
+    }
+    if (logSkillPolicy) {
+        DiagnosticLog(
+            "MeleeSplash skill settings skill=%d radius=%d splashPercent=%d "
+            "gateRequired=%s gateSatisfied=%s.",
+            skillId,
+            metadata->radiusTiles,
+            metadata->splashPercent,
+            metadata->gateRequired ? "true" : "false",
+            metadata->gateSatisfied ? "true" : "false");
     }
     if (metadata->radiusTiles <= 0 || metadata->splashPercent <= 0) return {};
     return metadata;
@@ -1467,6 +1622,50 @@ void TriggerSplash(PrimaryFrame& frame) noexcept {
     }
 }
 
+std::int32_t __fastcall HookPlayerSkillPositionInput(
+        void* game,
+        void* unit,
+        std::int32_t x,
+        std::int32_t y,
+        std::int32_t argument,
+        void* activeSkill) noexcept {
+    if (!Operational.load(std::memory_order_acquire)) {
+        return OriginalPlayerSkillPositionInput(
+            game, unit, x, y, argument, activeSkill);
+    }
+    RememberSkillInput(
+        game, unit, SkillIdFromActiveInput(activeSkill), {}, false);
+    return OriginalPlayerSkillPositionInput(
+        game, unit, x, y, argument, activeSkill);
+}
+
+std::int32_t __fastcall HookPlayerSkillUnitInput(
+        void* game,
+        void* unit,
+        std::int32_t targetType,
+        std::int32_t targetGuid,
+        void* activeSkill,
+        std::int32_t argument6,
+        std::int32_t argument7) noexcept {
+    if (!Operational.load(std::memory_order_acquire)) {
+        return OriginalPlayerSkillUnitInput(
+            game, unit, targetType, targetGuid, activeSkill,
+            argument6, argument7);
+    }
+    RememberSkillInput(
+        game,
+        unit,
+        SkillIdFromActiveInput(activeSkill),
+        {
+            .type = targetType,
+            .guid = static_cast<std::uint32_t>(targetGuid),
+        },
+        true);
+    return OriginalPlayerSkillUnitInput(
+        game, unit, targetType, targetGuid, activeSkill,
+        argument6, argument7);
+}
+
 void __fastcall HookFill(
         void* game,
         void* attacker,
@@ -1531,7 +1730,7 @@ void __fastcall HookFill(
 
     std::unique_ptr<CaptureMetadata> metadata;
     try {
-        metadata = BuildMetadata(attacker, defender, mode);
+        metadata = BuildMetadata(game, attacker, defender, mode);
     } catch (...) {
         OriginalFill(game, attacker, defender, damage, mode, sourceDamage);
         return;
@@ -1984,6 +2183,12 @@ bool ValidateExtensionSites() noexcept {
 
 bool ValidateOwnedSites() noexcept {
     return CheckBytes(FillDamageValuesRva, FillExpected, "FillDamageValues")
+        && CheckBytes(PlayerSkillPositionInputRva,
+            PlayerSkillPositionInputExpected, "player position-skill input")
+        && CheckBytes(PlayerSkillUnitInputRva,
+            PlayerSkillUnitInputExpected, "player unit-skill input")
+        && CheckBytes(ActiveSkillLayoutWitnessRva,
+            ActiveSkillLayoutWitnessExpected, "active-skill record layout")
         && CheckBytes(
             DirectMeleeFillContextRva,
             DirectMeleeFillContextExpected,
@@ -2155,7 +2360,13 @@ bool InstallHooks() noexcept {
         && InstallInline(EventFunc16Rva, Event16Expected, HookEvent16, &OriginalEvent16)
         && InstallInline(EventFunc19Rva, Event19Expected, HookEvent19, &OriginalEvent19)
         && InstallInline(EventFunc20Rva, Event20Expected, HookEvent20, &OriginalEvent20)
-        && InstallInline(EventFunc21Rva, Event21Expected, HookEvent21, &OriginalEvent21);
+        && InstallInline(EventFunc21Rva, Event21Expected, HookEvent21, &OriginalEvent21)
+        && InstallInline(PlayerSkillPositionInputRva,
+            PlayerSkillPositionInputExpected, HookPlayerSkillPositionInput,
+            &OriginalPlayerSkillPositionInput)
+        && InstallInline(PlayerSkillUnitInputRva,
+            PlayerSkillUnitInputExpected, HookPlayerSkillUnitInput,
+            &OriginalPlayerSkillUnitInput);
     if (!inlineInstalled) return false;
 
     auto* const relays = static_cast<std::uint8_t*>(RelayPage);
@@ -2231,6 +2442,75 @@ auto ExecutableDirectory() -> std::filesystem::path {
         .parent_path();
 }
 
+auto LoadSkillNameIndex(
+        const D2RL::PluginContext* context,
+        SkillNameIndex& skillIdsByName,
+        std::string& error) -> bool {
+    skillIdsByName.clear();
+    error.clear();
+    const auto modRoot = FindActiveModRootPath(context);
+    if (modRoot.empty()) {
+        error = "could not resolve the active mod data directory";
+        return false;
+    }
+
+    const auto directPath = modRoot / L"data/global/excel/skills.txt";
+    const auto basePath = modRoot / L"data/global/excel/base/skills.txt";
+    std::error_code fileError;
+    for (const auto& candidate : {directPath, basePath}) {
+        fileError.clear();
+        if (!std::filesystem::is_regular_file(candidate, fileError) || fileError) {
+            continue;
+        }
+        std::ifstream input(candidate, std::ios::binary);
+        if (!input) {
+            error = "could not read " + candidate.string();
+            return false;
+        }
+        const std::string text{
+            std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+        if (!ParseSkillNameIndex(text, skillIdsByName, error)) {
+            error = candidate.string() + ": " + error;
+            return false;
+        }
+        return true;
+    }
+
+    const auto compilerRoot = modRoot / L"d2rloader/data/compiler";
+    fileError.clear();
+    if (std::filesystem::is_directory(compilerRoot, fileError) && !fileError) {
+        std::vector<std::filesystem::path> compilerSkillFiles;
+        std::filesystem::directory_iterator entry(compilerRoot, fileError);
+        const std::filesystem::directory_iterator end;
+        while (!fileError && entry != end) {
+            const auto candidate = entry->path()
+                / L"data/global/excel/skills.txt";
+            std::error_code candidateError;
+            if (std::filesystem::is_regular_file(candidate, candidateError)
+                    && !candidateError) {
+                compilerSkillFiles.push_back(candidate);
+            }
+            entry.increment(fileError);
+        }
+        std::sort(compilerSkillFiles.begin(), compilerSkillFiles.end());
+        for (const auto& candidate : compilerSkillFiles) {
+            std::ifstream input(candidate, std::ios::binary);
+            if (!input) continue;
+            const std::string text{
+                std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+            if (!ParseSkillNameIndex(text, skillIdsByName, error)) {
+                error = candidate.string() + ": " + error;
+                return false;
+            }
+            return true;
+        }
+    }
+
+    error = "Skills.txt was not found under the active mod's data/global/excel "
+        "folder or D2RLoader compiler data";
+    return false;
+}
+
 auto LoadSettings(std::int32_t splashStatId) -> bool {
     ActiveConfig = Config{};
     ActiveConfig.enabled = true;
@@ -2244,7 +2524,73 @@ auto LoadSettings(std::int32_t splashStatId) -> bool {
         .layer = 0,
         .playerAttackersOnly = true,
     };
-    ActiveConfigPath = "d2rl-melee-splash.toml (stat " + std::to_string(splashStatId) + ")";
+
+    std::array<char, 16 * 1024> toml{};
+    std::uint32_t requiredSize{};
+    if (!Context || !Context->ReadConfig(
+            toml.data(), static_cast<std::uint32_t>(toml.size()), &requiredSize)
+            || requiredSize >= toml.size()) {
+        if (Context) {
+            Context->LogError(
+                "MeleeSplash: could not read the plugin TOML settings.");
+        }
+        return false;
+    }
+    const auto terminator = std::find(toml.begin(), toml.end(), '\0');
+    if (terminator == toml.end()) {
+        Context->LogError(
+            "MeleeSplash: plugin TOML settings are not null-terminated.");
+        return false;
+    }
+    const auto textSize = static_cast<std::size_t>(terminator - toml.begin());
+    SkillNameIndex skillIdsByName;
+    std::string skillNameError;
+    const bool skillNamesAvailable = LoadSkillNameIndex(
+        Context, skillIdsByName, skillNameError);
+    SkillSplashSettings skillSettings;
+    std::string parseError;
+    if (!ParseSkillSplashSettings(
+            std::string_view(toml.data(), textSize), skillIdsByName,
+            skillSettings, parseError)) {
+        if (!skillNamesAvailable
+                && parseError.find("unknown skill name") != std::string::npos) {
+            parseError += "; name lookup failed: " + skillNameError;
+        }
+        char message[512]{};
+        std::snprintf(message, sizeof(message),
+            "MeleeSplash: invalid skill splash settings (%s).", parseError.c_str());
+        Context->LogError(message);
+        return false;
+    }
+    ActiveConfig.activationMode = skillSettings.activationMode;
+    ActiveConfig.baseRadiusNormalWeapon = skillSettings.normalWeaponRadiusTiles;
+    ActiveConfig.baseRadiusExceptionalEliteWeapon =
+        skillSettings.exceptionalEliteWeaponRadiusTiles;
+    for (const auto& [skillId, damagePercent]
+            : skillSettings.fixedSplashDamagePercentBySkill) {
+        auto& override = ActiveConfig.skillOverrides[skillId];
+        override.enabled = true;
+        override.fixedSplashDamagePercent = damagePercent;
+        ActiveConfig.includedSkillIds.push_back(skillId);
+    }
+    for (const auto& [skillId, radiusTiles] : skillSettings.radiusTilesBySkill) {
+        ActiveConfig.skillOverrides[skillId].baseRadiusTiles = radiusTiles;
+    }
+    ActiveConfigPath = Context->pluginConfigPath
+        ? std::filesystem::path(Context->pluginConfigPath)
+        : std::filesystem::path("d2rl-melee-splash.toml");
+
+    char message[256]{};
+    std::snprintf(message, sizeof(message),
+        "MeleeSplash settings: mode=%s fixedSkillRows=%zu skillRadiusRows=%zu "
+        "radii=%d/%d.",
+        ActiveConfig.activationMode == ActivationMode::Whitelist
+            ? "whitelist" : "all",
+        skillSettings.fixedSplashDamagePercentBySkill.size(),
+        skillSettings.radiusTilesBySkill.size(),
+        ActiveConfig.baseRadiusNormalWeapon,
+        ActiveConfig.baseRadiusExceptionalEliteWeapon);
+    Context->LogInfo(message);
     return true;
 }
 
@@ -2263,7 +2609,7 @@ auto Status(
         std::snprintf(
             message,
             sizeof(message),
-        "Melee Splash 0.3.0: enabled=%s operational=%s partial=%s config=%s "
+        "Melee Splash 0.3.5: enabled=%s operational=%s partial=%s config=%s "
             "captures=%llu bursts=%llu secondaryHits=%llu rejectedHits=%llu "
             "rejectedTargets=%llu droppedSidecars=%llu.",
             ActiveConfig.enabled ? "true" : "false",
@@ -2280,7 +2626,7 @@ auto Status(
         command->plugin->WriteConsoleMessage(message);
     } catch (...) {
         command->plugin->WriteConsoleMessage(
-            "Melee Splash 0.3.0: status unavailable (allocation failure).");
+            "Melee Splash 0.3.5: status unavailable (allocation failure).");
     }
     return D2RL::ConsoleCommandResult::Handled;
 }
@@ -2296,9 +2642,16 @@ void ResetState() noexcept {
     RejectedTargets.store(0, std::memory_order_relaxed);
     DroppedSidecars.store(0, std::memory_order_relaxed);
     FillDiagnosticLines.store(0, std::memory_order_relaxed);
+    SkillPolicyDiagnosticLines.store(0, std::memory_order_relaxed);
+    SkillInputDiagnosticLines.store(0, std::memory_order_relaxed);
     try {
         std::scoped_lock lock(SidecarMutex);
         Sidecars.clear();
+    } catch (...) {
+    }
+    try {
+        std::scoped_lock lock(RecentSkillInputsMutex);
+        RecentSkillInputs.clear();
     } catch (...) {
     }
 }
@@ -2317,9 +2670,9 @@ constexpr D2RL::PluginInfo Info{
     .abiVersion = D2RL_PLUGIN_ABI_VERSION,
     .id = "d2rl-melee-splash",
     .name = "Melee Splash",
-    .version = "0.3.0",
+    .version = "0.3.5",
     .author = "MadMike",
-    .description = "Adds melee splash damage from item stats to nearby monsters.",
+    .description = "Adds configurable melee splash damage to nearby monsters.",
     .flags = D2RL::PluginFlags::Server
         | D2RL::PluginFlags::NativeHooks
         | D2RL::PluginFlags::ModScopedOnly,
@@ -2340,10 +2693,17 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(
     ResetState();
     if (!Context || !Base) return false;
     const auto splashStatId = RunFirstRunInstall(context);
-    if (splashStatId < 0 || !LoadSettings(splashStatId)) return false;
+    if (splashStatId < 0) return false;
+    try {
+        if (!LoadSettings(splashStatId)) return false;
+    } catch (...) {
+        Context->LogError(
+            "MeleeSplash: failed while loading the plugin TOML settings.");
+        return false;
+    }
     if (!ActiveConfig.enabled) {
         Context->LogInfo(
-            "Melee Splash 0.3.0 loaded disabled; no hooks installed.");
+            "Melee Splash 0.3.5 loaded disabled; no hooks installed.");
         if (!Context->RegisterConsoleCommand(
                 "melee-splash", Status, "Show Melee Splash status.")) {
             Context->LogWarn(
@@ -2389,13 +2749,13 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(
         std::snprintf(
             message,
             sizeof(message),
-            "Melee Splash 0.3.0 by MadMike active; stat=%d config=%s.",
+            "Melee Splash 0.3.5 by MadMike active; stat=%d config=%s.",
             ActiveConfig.splashDamagePercentStatId,
             path.c_str());
         Context->LogInfo(message);
     } catch (...) {
         Context->LogInfo(
-            "Melee Splash 0.3.0 by MadMike active; config path unavailable.");
+            "Melee Splash 0.3.5 by MadMike active; config path unavailable.");
     }
     return true;
 }
@@ -2410,3 +2770,4 @@ D2RL_PLUGIN_EXPORT void D2RLoaderUnloadPlugin() noexcept {
     }
     Context = nullptr;
 }
+

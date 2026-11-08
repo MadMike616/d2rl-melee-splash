@@ -1,10 +1,15 @@
 #pragma once
 
 #include <algorithm>
+#include <charconv>
+#include <cctype>
 #include <cstdint>
 #include <limits>
 #include <map>
 #include <optional>
+#include <string>
+#include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace RuffnecKk::MeleeSplash {
@@ -13,6 +18,8 @@ inline constexpr std::int32_t NormalAttackSkillId = 0;
 inline constexpr std::int32_t DisabledStatId = -1;
 inline constexpr std::int32_t AnyLayer = -1;
 inline constexpr std::int32_t MaximumSplashDamagePercent = 1000;
+// The native radius helper squares coordinate deltas in signed 32-bit space.
+inline constexpr std::int32_t MaximumConfigRadiusTiles = 32767;
 
 enum class ActivationMode {
 	AllEligibleMelee,
@@ -24,9 +31,312 @@ struct SkillOverride {
 	std::optional<bool> enabled;
 	std::optional<std::int32_t> baseRadiusTiles;
 	std::optional<std::int32_t> baseSplashDamagePercent;
+	std::optional<std::int32_t> fixedSplashDamagePercent;
 	std::optional<bool> requireGateStat;
 	bool weaponSourceOnly{};
 };
+
+struct SkillSplashSettings {
+	ActivationMode activationMode{ActivationMode::AllEligibleMelee};
+	std::int32_t normalWeaponRadiusTiles{4};
+	std::int32_t exceptionalEliteWeaponRadiusTiles{5};
+	std::map<std::int32_t, std::int32_t> fixedSplashDamagePercentBySkill;
+	std::map<std::int32_t, std::int32_t> radiusTilesBySkill;
+};
+
+using SkillNameIndex = std::map<std::string, std::int32_t>;
+
+inline std::string_view Trim(std::string_view text) noexcept {
+	while (!text.empty() && (text.front() == ' ' || text.front() == '\t'
+			|| text.front() == '\r' || text.front() == '\n')) {
+		text.remove_prefix(1);
+	}
+	while (!text.empty() && (text.back() == ' ' || text.back() == '\t'
+			|| text.back() == '\r' || text.back() == '\n')) {
+		text.remove_suffix(1);
+	}
+	return text;
+}
+
+inline std::string_view StripTomlComment(std::string_view line) noexcept {
+	bool quoted = false;
+	bool escaped = false;
+	for (std::size_t i = 0; i < line.size(); ++i) {
+		const auto ch = line[i];
+		if (quoted && escaped) {
+			escaped = false;
+			continue;
+		}
+		if (quoted && ch == '\\') {
+			escaped = true;
+			continue;
+		}
+		if (ch == '"') {
+			quoted = !quoted;
+		} else if (ch == '#' && !quoted) {
+			return line.substr(0, i);
+		}
+	}
+	return line;
+}
+
+inline bool ParseTomlInteger(
+		std::string_view text, std::int32_t& result) noexcept {
+	text = Trim(text);
+	if (text.empty()) return false;
+	const auto parsed = std::from_chars(
+		text.data(), text.data() + text.size(), result, 10);
+	return parsed.ec == std::errc{}
+		&& parsed.ptr == text.data() + text.size();
+}
+
+inline auto NormalizeSkillName(std::string_view name) -> std::string {
+	name = Trim(name);
+	std::string normalized;
+	normalized.reserve(name.size());
+	for (const auto ch : name) {
+		normalized.push_back(static_cast<char>(std::toupper(
+			static_cast<unsigned char>(ch))));
+	}
+	return normalized;
+}
+
+inline auto SplitTabSeparatedLine(std::string_view line)
+		-> std::vector<std::string_view> {
+	std::vector<std::string_view> fields;
+	while (true) {
+		const auto tab = line.find('\t');
+		fields.push_back(line.substr(0, tab));
+		if (tab == std::string_view::npos) break;
+		line.remove_prefix(tab + 1);
+	}
+	return fields;
+}
+
+// Builds the name-to-ID map from the active mod's Skills.txt. The table's
+// internal `skill` column is used so names do not depend on localization.
+inline auto ParseSkillNameIndex(
+		std::string_view skillsTxt,
+		SkillNameIndex& skillIdsByName,
+		std::string& error) -> bool {
+	skillIdsByName.clear();
+	error.clear();
+	if (skillsTxt.size() >= 3
+			&& static_cast<unsigned char>(skillsTxt[0]) == 0xEF
+			&& static_cast<unsigned char>(skillsTxt[1]) == 0xBB
+			&& static_cast<unsigned char>(skillsTxt[2]) == 0xBF) {
+		skillsTxt.remove_prefix(3);
+	}
+	const auto newline = skillsTxt.find('\n');
+	const auto headerLine = newline == std::string_view::npos
+		? skillsTxt : skillsTxt.substr(0, newline);
+	auto headers = SplitTabSeparatedLine(headerLine);
+	std::size_t skillColumn = headers.size();
+	std::size_t idColumn = headers.size();
+	for (std::size_t i = 0; i < headers.size(); ++i) {
+		const auto header = NormalizeSkillName(headers[i]);
+		if (header == "SKILL") skillColumn = i;
+		else if (header == "*ID") idColumn = i;
+	}
+	if (skillColumn == headers.size() || idColumn == headers.size()) {
+		error = "active Skills.txt must contain the skill and *Id columns";
+		return false;
+	}
+	if (newline == std::string_view::npos) return true;
+	skillsTxt.remove_prefix(newline + 1);
+	std::size_t lineNumber = 1;
+	while (!skillsTxt.empty()) {
+		++lineNumber;
+		const auto rowEnd = skillsTxt.find('\n');
+		const auto row = rowEnd == std::string_view::npos
+			? skillsTxt : skillsTxt.substr(0, rowEnd);
+		skillsTxt = rowEnd == std::string_view::npos
+			? std::string_view{} : skillsTxt.substr(rowEnd + 1);
+		const auto fields = SplitTabSeparatedLine(row);
+		if (skillColumn >= fields.size() || idColumn >= fields.size()) continue;
+		const auto name = Trim(fields[skillColumn]);
+		const auto idText = Trim(fields[idColumn]);
+		if (name.empty() || idText.empty()) continue;
+		std::int32_t skillId{};
+		if (!ParseTomlInteger(idText, skillId) || skillId < 0
+				|| skillId > std::numeric_limits<std::int16_t>::max()) {
+			error = "invalid Skills.txt *Id on line " + std::to_string(lineNumber);
+			return false;
+		}
+		auto [entry, inserted] = skillIdsByName.emplace(
+			NormalizeSkillName(name), skillId);
+		if (!inserted && entry->second != skillId) {
+			error = "duplicate skill name with different IDs in Skills.txt: "
+				+ std::string(name);
+			return false;
+		}
+	}
+	return true;
+}
+
+inline auto ParseSkillKey(
+		std::string_view key,
+		const SkillNameIndex& skillIdsByName,
+		std::int32_t& skillId,
+		std::string& error,
+		std::size_t lineNumber) -> bool {
+	key = Trim(key);
+	if (ParseTomlInteger(key, skillId)) {
+		if (skillId >= 0
+				&& skillId <= std::numeric_limits<std::int16_t>::max()) {
+			return true;
+		}
+		error = "skill ID on line " + std::to_string(lineNumber)
+			+ " must be from 0 to "
+			+ std::to_string(std::numeric_limits<std::int16_t>::max());
+		return false;
+	}
+	std::string name;
+	if (!key.empty() && key.front() == '"') {
+		if (key.size() < 2 || key.back() != '"') {
+			error = "invalid quoted skill name on line " + std::to_string(lineNumber);
+			return false;
+		}
+		const auto quoted = key.substr(1, key.size() - 2);
+		name.reserve(quoted.size());
+		for (std::size_t i = 0; i < quoted.size(); ++i) {
+			if (quoted[i] == '\\') {
+				if (++i >= quoted.size()
+						|| (quoted[i] != '\\' && quoted[i] != '"')) {
+					error = "invalid escape in skill name on line "
+						+ std::to_string(lineNumber);
+					return false;
+				}
+			}
+			name.push_back(quoted[i]);
+		}
+	} else {
+		name.assign(key);
+	}
+	const auto found = skillIdsByName.find(NormalizeSkillName(name));
+	if (name.empty() || found == skillIdsByName.end()) {
+		error = "unknown skill name on line " + std::to_string(lineNumber)
+			+ ": " + name
+			+ "; names must match the active Skills.txt skill column, or use a numeric *Id";
+		return false;
+	}
+	skillId = found->second;
+	return true;
+}
+
+// Reads the small plugin-owned TOML surface used for skill-specific splash.
+// Other plugin and installer sections are intentionally ignored.
+inline bool ParseSkillSplashSettings(
+		std::string_view toml,
+		const SkillNameIndex& skillIdsByName,
+		SkillSplashSettings& settings,
+		std::string& error) {
+	settings = SkillSplashSettings{};
+	error.clear();
+	enum class Section { Other, MeleeSplash, Skills, SkillRadiusTiles };
+	auto section = Section::Other;
+	std::size_t lineNumber = 0;
+	while (!toml.empty()) {
+		++lineNumber;
+		const auto newline = toml.find('\n');
+		const auto rawLine = newline == std::string_view::npos
+			? toml : toml.substr(0, newline);
+		toml = newline == std::string_view::npos
+			? std::string_view{} : toml.substr(newline + 1);
+		const auto line = Trim(StripTomlComment(rawLine));
+		if (line.empty()) continue;
+		if (line.front() == '[' && line.back() == ']') {
+			const auto name = Trim(line.substr(1, line.size() - 2));
+			if (name == "melee_splash") section = Section::MeleeSplash;
+			else if (name == "melee_splash.skills") section = Section::Skills;
+			else if (name == "melee_splash.skill_radius_tiles") {
+				section = Section::SkillRadiusTiles;
+			}
+			else section = Section::Other;
+			continue;
+		}
+		if (section == Section::Other) continue;
+		const auto equals = line.find('=');
+		if (equals == std::string_view::npos) {
+			error = "expected key = value on line " + std::to_string(lineNumber);
+			return false;
+		}
+		const auto key = Trim(line.substr(0, equals));
+		const auto value = Trim(line.substr(equals + 1));
+		if (section == Section::MeleeSplash) {
+			if (key == "skill_mode") {
+				if (value == "\"all\"") {
+					settings.activationMode = ActivationMode::AllEligibleMelee;
+				} else if (value == "\"whitelist\"") {
+					settings.activationMode = ActivationMode::Whitelist;
+				} else {
+					error = "skill_mode on line " + std::to_string(lineNumber)
+						+ " must be \"all\" or \"whitelist\"";
+					return false;
+				}
+				continue;
+			}
+			if (key != "normal_weapon_radius_tiles"
+					&& key != "exceptional_elite_weapon_radius_tiles") continue;
+			std::int32_t radiusTiles{};
+			if (!ParseTomlInteger(value, radiusTiles)
+					|| radiusTiles < 0
+					|| radiusTiles > MaximumConfigRadiusTiles) {
+				error = "radius in tiles on line " + std::to_string(lineNumber)
+					+ " must be from 0 to "
+					+ std::to_string(MaximumConfigRadiusTiles);
+				return false;
+			}
+			if (key == "normal_weapon_radius_tiles") {
+				settings.normalWeaponRadiusTiles = radiusTiles;
+			} else {
+				settings.exceptionalEliteWeaponRadiusTiles = radiusTiles;
+			}
+			continue;
+		}
+		std::int32_t skillId{};
+		if (!ParseSkillKey(key, skillIdsByName, skillId, error, lineNumber)) {
+			return false;
+		}
+		std::int32_t configuredValue{};
+		if (!ParseTomlInteger(value, configuredValue)) {
+			error = (section == Section::Skills ? "splash percent" : "radius in tiles")
+				+ std::string(" on line ") + std::to_string(lineNumber)
+				+ " must be an integer";
+			return false;
+		}
+		if (section == Section::Skills) {
+			if (configuredValue < 0
+					|| configuredValue > MaximumSplashDamagePercent) {
+				error = "splash percent on line " + std::to_string(lineNumber)
+					+ " must be from 0 to "
+					+ std::to_string(MaximumSplashDamagePercent);
+				return false;
+			}
+			if (!settings.fixedSplashDamagePercentBySkill.emplace(
+					skillId, configuredValue).second) {
+				error = "duplicate skill name or ID on line "
+					+ std::to_string(lineNumber);
+				return false;
+			}
+		} else {
+			if (configuredValue < 0
+					|| configuredValue > MaximumConfigRadiusTiles) {
+				error = "radius in tiles on line " + std::to_string(lineNumber)
+					+ " must be from 0 to "
+					+ std::to_string(MaximumConfigRadiusTiles);
+				return false;
+			}
+			if (!settings.radiusTilesBySkill.emplace(
+					skillId, configuredValue).second) {
+				error = "duplicate skill name or ID on line "
+					+ std::to_string(lineNumber);
+				return false;
+			}
+		}
+	}
+	return true;
+}
 
 struct CharmTier {
 	std::int32_t statId{};
@@ -154,6 +464,11 @@ inline std::int32_t ResolveSplashDamagePercent(
 		const Config& config,
 		std::int32_t skillId,
 		std::int32_t totalSplashDamagePercent) noexcept {
+	if (const auto* override = FindSkillOverride(config, skillId);
+			override && override->fixedSplashDamagePercent.has_value()) {
+		return std::clamp(*override->fixedSplashDamagePercent,
+			0, MaximumSplashDamagePercent);
+	}
 	auto basePercent = config.baseSplashDamagePercent;
 	if (const auto* override = FindSkillOverride(config, skillId);
 			override && override->baseSplashDamagePercent.has_value()) {
@@ -200,3 +515,4 @@ inline bool AppendUniqueSecondaryTarget(
 }
 
 } // namespace RuffnecKk::MeleeSplash
+

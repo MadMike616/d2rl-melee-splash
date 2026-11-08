@@ -866,12 +866,37 @@ auto Install(const D2RL::PluginContext* context) -> std::int32_t {
 		}
 	}
 
-	const std::string marker =
+	std::string marker =
 		"[installation]\n"
 		"complete = true\n"
-		"plugin_version = \"0.3.1\"\n"
+		"plugin_version = \"0.3.5\"\n"
 		"stat_id = " + std::to_string(statId) + "\n"
-		"property_id = " + std::to_string(propertyId) + "\n";
+		"property_id = " + std::to_string(propertyId) + "\n"
+		"\n[melee_splash]\n"
+		"# Default mode, all: eligible melee skills use item meleesplash unless a row overrides the skill.\n"
+		"# whitelist: only listed skills splash; their fixed values ignore item meleesplash.\n"
+		"skill_mode = \"all\"\n"
+		"# Default radius by weapon tier, in tiles. Exceptional and elite weapons share one value.\n"
+		"normal_weapon_radius_tiles = 4\n"
+		"exceptional_elite_weapon_radius_tiles = 5\n"
+		"\n[melee_splash.skills]\n"
+		"# Keys accept names from the active Skills.txt skill column or numeric *Id. Names are case-insensitive.\n"
+		"# Names resolve against active mod data; numeric keys refer to literal IDs. Quote names with spaces.\n"
+		"# Values are fixed splash percentages from 0 to 1000; 0 disables a listed skill.\n"
+		"# Only supported melee hit paths splash; whitelisting a ranged projectile skill usually has no effect.\n"
+		"# Uncomment these examples and set skill_mode = \"whitelist\" to use only these skills.\n"
+		"# Whirlwind = 100\n"
+		"# Bash = 100\n"
+		"# Other examples: 151 = 100 or \"Left Hand Swing\" = 50\n";
+	const auto radiusSection =
+		"\n[melee_splash.skill_radius_tiles]\n"
+		"# Optional per-skill radius overrides, in tiles; these replace both weapon-tier defaults.\n"
+		"# Radius rows do not enable a skill or add it to the whitelist.\n"
+		"# Optional examples (uncomment to use):\n"
+		"# Whirlwind = 8\n"
+		"# Bash = 8\n"
+		"# Numeric skill IDs also work, for example 151 = 8\n";
+	marker.append(radiusSection);
 	WriteAtomic(markerPath, StringToBytes(marker));
 	char message[256]{};
 	std::snprintf(message, sizeof(message),
@@ -882,6 +907,15 @@ auto Install(const D2RL::PluginContext* context) -> std::int32_t {
 }
 
 } // namespace
+
+auto FindActiveModRootPath(const D2RL::PluginContext* context) noexcept
+		-> std::filesystem::path {
+	try {
+		return FindActiveModRoot(context);
+	} catch (...) {
+		return {};
+	}
+}
 
 auto RunFirstRunInstall(const D2RL::PluginContext* context) noexcept -> std::int32_t {
 	if (context == nullptr) {
@@ -902,3 +936,4 @@ auto RunFirstRunInstall(const D2RL::PluginContext* context) noexcept -> std::int
 }
 
 } // namespace RuffnecKk::MeleeSplash
+
