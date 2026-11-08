@@ -1,10 +1,12 @@
 # D2R Melee Splash hook inventory
 
-Updated for release **v0.3.5**, 2026-11-08. This inventory is derived from `src/plugin.cpp` and records executable mutation sites only. RVAs are relative to the D2R executable module base.
+Updated for release **v0.3.6**, 2026-11-08. This inventory is derived from `src/plugin.cpp` and records executable mutation sites only. RVAs are relative to the D2R executable module base.
+
+Release v0.3.6 adds TOML splash calculation behavior and does not change any inline hook, call-site patch, or validation witness from v0.3.5. The native hook inventory below was checked against the v0.3.6 source.
 
 Every installed site is checked against expected bytes before mutation. Inline hooks use D2RLoader SDK `InstallInlineHook`; call-site changes use expected-byte-checked `PatchBytes` to a nearby relay. The plugin fails closed if a required signature or structure witness does not match.
 
-## Inline hooks installed by v0.3.5
+## Inline hooks installed by v0.3.6
 
 | Target | RVA | Handler |
 | --- | ---: | --- |
@@ -23,7 +25,7 @@ Every installed site is checked against expected bytes before mutation. Inline h
 | Player position-skill input | `0x4FDB40` | `HookPlayerSkillPositionInput` |
 | Player unit-skill input | `0x4F8DE0` | `HookPlayerSkillUnitInput` |
 
-The last two inline hooks were added after v0.3.1 to identify skill names/IDs for whitelist and per-skill settings.
+The last two inline hooks identify skill names/IDs for whitelist and per-skill settings. They are unchanged in v0.3.6.
 
 ## Call-site patches
 
@@ -42,4 +44,3 @@ These locations are checked as structural witnesses and are not patched:
 - Direct melee Fill call context: `0x43009E`
 
 The source contains no vtable hooks or OS-level input hooks. The skill-input hooks above are inline hooks on game executable routines.
-

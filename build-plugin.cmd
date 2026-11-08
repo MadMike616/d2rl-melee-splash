@@ -9,7 +9,7 @@ if "%~1"=="" (
 set "ROOT=%~dp0"
 set "SRC=%ROOT%src"
 set "SDK_INCLUDE=%~1\include"
-set "OUT=%TEMP%\d2rl-melee-splash-build-0.3.5"
+set "OUT=%TEMP%\d2rl-melee-splash-build-0.3.6"
 
 if not exist "%SDK_INCLUDE%\D2RLPlugin\api.h" (
     echo Could not find D2RLoader SDK headers under "%SDK_INCLUDE%".
@@ -41,4 +41,3 @@ if errorlevel 1 exit /b %errorlevel%
 
 echo Built: %OUT%\d2rl-melee-splash.dll
 endlocal
-

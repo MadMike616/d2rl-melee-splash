@@ -740,8 +740,12 @@ auto MarkerStatId(const fs::path& markerPath) -> std::optional<std::int32_t> {
 		throw std::runtime_error("the melee-splash TOML marker path is not a regular file");
 	}
 	const auto marker = ReadText(markerPath);
-	const std::regex complete(R"REGEX((?:^|\n)\s*complete\s*=\s*true\s*(?:\r?$))REGEX", std::regex_constants::icase | std::regex_constants::multiline);
-	const std::regex statIdExpression(R"REGEX((?:^|\n)\s*stat_id\s*=\s*(\d+)\s*(?:\r?$))REGEX", std::regex_constants::icase | std::regex_constants::multiline);
+	const std::regex complete(
+		R"REGEX((?:^|\n)[ \t]*complete[ \t]*=[ \t]*true[ \t]*(?:\r?\n|$))REGEX",
+		std::regex_constants::icase);
+	const std::regex statIdExpression(
+		R"REGEX((?:^|\n)[ \t]*stat_id[ \t]*=[ \t]*(\d+)[ \t]*(?:\r?\n|$))REGEX",
+		std::regex_constants::icase);
 	std::smatch completeMatch;
 	std::smatch statMatch;
 	if (!std::regex_search(marker, completeMatch, complete)
@@ -869,12 +873,13 @@ auto Install(const D2RL::PluginContext* context) -> std::int32_t {
 	std::string marker =
 		"[installation]\n"
 		"complete = true\n"
-		"plugin_version = \"0.3.5\"\n"
+		"plugin_version = \"0.3.6\"\n"
 		"stat_id = " + std::to_string(statId) + "\n"
 		"property_id = " + std::to_string(propertyId) + "\n"
 		"\n[melee_splash]\n"
-		"# Default mode, all: eligible melee skills use item meleesplash unless a row overrides the skill.\n"
-		"# whitelist: only listed skills splash; their fixed values ignore item meleesplash.\n"
+		"# Modes: all = a listed skill replaces item meleesplash; additive = its value adds to item meleesplash.\n"
+		"# whitelist = only listed skills splash, using each listed value instead of item meleesplash.\n"
+		"# Use skill_mode = \"additive\" to combine item meleesplash with the configured skill values.\n"
 		"skill_mode = \"all\"\n"
 		"# Default radius by weapon tier, in tiles. Exceptional and elite weapons share one value.\n"
 		"normal_weapon_radius_tiles = 4\n"
@@ -884,7 +889,8 @@ auto Install(const D2RL::PluginContext* context) -> std::int32_t {
 		"# Names resolve against active mod data; numeric keys refer to literal IDs. Quote names with spaces.\n"
 		"# Values are fixed splash percentages from 0 to 1000; 0 disables a listed skill.\n"
 		"# Only supported melee hit paths splash; whitelisting a ranged projectile skill usually has no effect.\n"
-		"# Uncomment these examples and set skill_mode = \"whitelist\" to use only these skills.\n"
+		"# With additive, these skill values add to item meleesplash. With all, they replace it.\n"
+		"# With whitelist, only listed skills splash and use exactly these values.\n"
 		"# Whirlwind = 100\n"
 		"# Bash = 100\n"
 		"# Other examples: 151 = 100 or \"Left Hand Swing\" = 50\n";
@@ -936,4 +942,3 @@ auto RunFirstRunInstall(const D2RL::PluginContext* context) noexcept -> std::int
 }
 
 } // namespace RuffnecKk::MeleeSplash
-

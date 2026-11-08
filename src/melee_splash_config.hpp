@@ -23,9 +23,21 @@ inline constexpr std::int32_t MaximumConfigRadiusTiles = 32767;
 
 enum class ActivationMode {
 	AllEligibleMelee,
+	Additive,
 	Whitelist,
 	Blacklist,
 };
+
+inline constexpr auto ActivationModeName(ActivationMode mode) noexcept
+		-> const char* {
+	switch (mode) {
+	case ActivationMode::Additive: return "additive";
+	case ActivationMode::Whitelist: return "whitelist";
+	case ActivationMode::Blacklist: return "blacklist";
+	case ActivationMode::AllEligibleMelee:
+	default: return "all";
+	}
+}
 
 struct SkillOverride {
 	std::optional<bool> enabled;
@@ -265,13 +277,16 @@ inline bool ParseSkillSplashSettings(
 		const auto value = Trim(line.substr(equals + 1));
 		if (section == Section::MeleeSplash) {
 			if (key == "skill_mode") {
-				if (value == "\"all\"") {
+				const auto normalizedMode = NormalizeSkillName(value);
+				if (normalizedMode == "\"ALL\"") {
 					settings.activationMode = ActivationMode::AllEligibleMelee;
-				} else if (value == "\"whitelist\"") {
+				} else if (normalizedMode == "\"ADDITIVE\"") {
+					settings.activationMode = ActivationMode::Additive;
+				} else if (normalizedMode == "\"WHITELIST\"") {
 					settings.activationMode = ActivationMode::Whitelist;
 				} else {
 					error = "skill_mode on line " + std::to_string(lineNumber)
-						+ " must be \"all\" or \"whitelist\"";
+						+ " must be \"all\", \"additive\", or \"whitelist\"";
 					return false;
 				}
 				continue;
@@ -464,18 +479,24 @@ inline std::int32_t ResolveSplashDamagePercent(
 		const Config& config,
 		std::int32_t skillId,
 		std::int32_t totalSplashDamagePercent) noexcept {
-	if (const auto* override = FindSkillOverride(config, skillId);
-			override && override->fixedSplashDamagePercent.has_value()) {
+	auto basePercent = config.baseSplashDamagePercent;
+	const auto* override = FindSkillOverride(config, skillId);
+	if (override && override->baseSplashDamagePercent.has_value()) {
+		basePercent = *override->baseSplashDamagePercent;
+	}
+	if (override && override->fixedSplashDamagePercent.has_value()
+			&& config.activationMode != ActivationMode::Additive) {
 		return std::clamp(*override->fixedSplashDamagePercent,
 			0, MaximumSplashDamagePercent);
 	}
-	auto basePercent = config.baseSplashDamagePercent;
-	if (const auto* override = FindSkillOverride(config, skillId);
-			override && override->baseSplashDamagePercent.has_value()) {
-		basePercent = *override->baseSplashDamagePercent;
+	auto totalValue = static_cast<std::int64_t>(basePercent)
+		+ totalSplashDamagePercent;
+	if (config.activationMode == ActivationMode::Additive
+			&& override && override->fixedSplashDamagePercent.has_value()) {
+		totalValue += std::clamp(*override->fixedSplashDamagePercent,
+			0, MaximumSplashDamagePercent);
 	}
-	const auto total = SaturatingNonNegative(
-		static_cast<std::int64_t>(basePercent) + totalSplashDamagePercent);
+	const auto total = SaturatingNonNegative(totalValue);
 	return std::min(total, MaximumSplashDamagePercent);
 }
 
@@ -515,4 +536,3 @@ inline bool AppendUniqueSecondaryTarget(
 }
 
 } // namespace RuffnecKk::MeleeSplash
-

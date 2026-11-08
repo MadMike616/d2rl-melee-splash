@@ -16,4 +16,3 @@ auto RunFirstRunInstall(const D2RL::PluginContext* context) noexcept
 	-> std::int32_t;
 
 } // namespace RuffnecKk::MeleeSplash
-

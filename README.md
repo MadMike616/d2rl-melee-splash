@@ -8,7 +8,7 @@ D2RLoader plugin that adds configurable melee splash damage to Diablo II: Resurr
 - Splash copies the primary hit's damage packet, including supported physical-to-element conversions. Berserk's converted physical damage is applied as magic damage; separately added elemental damage retains its type.
 - The plugin disables the game's legacy splash callback and uses a 0% base value, so the `meleesplash` item stat controls the total.
 - The default radius is configurable separately for normal weapons and exceptional/elite weapons; individual skills can override it in the plugin TOML.
-- Skill-specific fixed splash percentages can be configured in the plugin TOML, including a whitelist-only mode.
+- Skill-specific splash percentages can be configured in the plugin TOML with `all`, `additive`, or `whitelist` mode.
 - The plugin supports normal attacks and eligible melee skills. Unsupported executable layouts fail closed without installing hooks.
 
 ## Install
@@ -47,7 +47,7 @@ The same `d2rloader/config/d2rl-melee-splash.toml` file can assign a fixed splas
 
 ```toml
 [melee_splash]
-skill_mode = "all" # "all" or "whitelist"
+skill_mode = "all" # "all", "additive", or "whitelist"
 normal_weapon_radius_tiles = 4
 exceptional_elite_weapon_radius_tiles = 5
 
@@ -64,13 +64,15 @@ Bash = 8
 
 Skill names are case-insensitive and resolve from the active mod's `Skills.txt` `skill` column. If `Skills.txt` is absent, the plugin checks D2RLoader's compiled mod data. Numeric `*Id` keys remain available when no skill table can be found.
 
-In `all` mode, eligible melee skills keep using the summed item `meleesplash` stat unless they have a row; a listed skill uses exactly its row's percentage and ignores the item stat. In `whitelist` mode, only skills with rows in `[melee_splash.skills]` splash, each using its fixed percentage and ignoring the item stat. Values can be 0–1000; 0 disables splash for that listed skill.
+The `skill_mode` value is case-insensitive.
+
+In `all` mode, eligible melee skills use the summed item `meleesplash` stat unless they have a row; a listed skill uses exactly its row's percentage and ignores the item stat. In `additive` mode, every eligible melee skill uses the summed item stat, and a listed skill adds its row's percentage on top. For example, 25% from items plus `Whirlwind = 8` produces 33% splash for Whirlwind. In `whitelist` mode, only skills with rows in `[melee_splash.skills]` splash, each using exactly its row's percentage and ignoring the item stat. Values can be 0–1000; 0 adds nothing in `additive`, disables the listed skill in `all`, and yields no splash for that skill in `whitelist`.
 
 `normal_weapon_radius_tiles` and `exceptional_elite_weapon_radius_tiles` set the default radius by weapon tier (defaults: 4 and 5 tiles). A skill listed under `[melee_splash.skill_radius_tiles]` uses that radius instead of either weapon-tier default. Radius values can be 0–32767 tiles. Radius entries only change the radius: they do not enable a skill or add it to the whitelist. To whitelist a skill, also add its fixed splash percentage under `[melee_splash.skills]`.
 
 The plugin reads these settings when it loads. Restart D2RLoader after editing the TOML file.
 
-The first-run TOML uses `skill_mode = "all"` by default. It includes commented Whirlwind and Bash examples under `[melee_splash.skills]` for switching to whitelist mode, plus commented 8-tile per-skill radius examples.
+The first-run TOML uses `skill_mode = "all"` by default. It includes commented Whirlwind and Bash examples under `[melee_splash.skills]` for trying any of the three modes, plus commented 8-tile per-skill radius examples.
 
 The first-run installer shares a mutex with Quest Reward Reset 1.0.24 and later, so those two plugins serialize their initial edits and backups when they start together.
 
@@ -85,4 +87,3 @@ Use D2RLoader PluginSDK 0.4.0 / Plugin ABI 4, Windows x64, and an x64 Visual Stu
 ## Third-party source
 
 The native damage-packet capture and secondary-hit implementation adapts RuffnecKk's `MeleeSplash` source, with explicit permission from the original coder. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for attribution. The expected-byte signatures for skill input hooks were verified against RuffDood's D2RLoader Suite; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
-
