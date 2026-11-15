@@ -18,6 +18,7 @@ published DLL, use the installation instructions for that version on the
 [Releases page](https://github.com/MadMike616/d2rl-melee-splash/releases).
 
 You need D2RLoader with Plugin ABI 4 support and an unpacked, writable mod.
+Melee Splash v1.3.9 was tested with D2R 3.4.95032 and D2RLoader 1.3.1-beta.
 In the standard layout, the mod's loose data is under
 `mods/<ModName>/<ModName>.mpq/data/`, where `<ModName>.mpq` is a directory.
 
