@@ -12,7 +12,12 @@ namespace RuffnecKk::MeleeSplash {
 auto FindActiveModRootPath(const D2RL::PluginContext* context) noexcept
 	-> std::filesystem::path;
 
+struct FirstRunResult {
+	std::int32_t statId{-1};
+	bool restartRequired{};
+};
+
 auto RunFirstRunInstall(const D2RL::PluginContext* context) noexcept
-	-> std::int32_t;
+	-> FirstRunResult;
 
 } // namespace RuffnecKk::MeleeSplash

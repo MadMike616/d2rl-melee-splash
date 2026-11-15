@@ -52,6 +52,7 @@ struct SkillSplashSettings {
 	ActivationMode activationMode{ActivationMode::AllEligibleMelee};
 	std::int32_t normalWeaponRadiusTiles{4};
 	std::int32_t exceptionalEliteWeaponRadiusTiles{5};
+	bool diagnosticLogging{};
 	std::map<std::int32_t, std::int32_t> fixedSplashDamagePercentBySkill;
 	std::map<std::int32_t, std::int32_t> radiusTilesBySkill;
 };
@@ -291,6 +292,16 @@ inline bool ParseSkillSplashSettings(
 				}
 				continue;
 			}
+			if (key == "diagnostic_logging") {
+				if (value == "true") settings.diagnosticLogging = true;
+				else if (value == "false") settings.diagnosticLogging = false;
+				else {
+					error = "diagnostic_logging on line " + std::to_string(lineNumber)
+						+ " must be true or false";
+					return false;
+				}
+				continue;
+			}
 			if (key != "normal_weapon_radius_tiles"
 					&& key != "exceptional_elite_weapon_radius_tiles") continue;
 			std::int32_t radiusTiles{};
@@ -379,14 +390,12 @@ struct Config {
 	std::int32_t gateStatId{DisabledStatId};
 	std::int32_t increasedRadiusStatId{DisabledStatId};
 	std::int32_t radiusPercentPerTile{20};
-	std::int32_t splashDamagePercentStatId{DisabledStatId};
 	std::int32_t baseSplashDamagePercent{};
 	std::int32_t baseRadiusNormalWeapon{4};
 	std::int32_t baseRadiusExceptionalEliteWeapon{5};
 	std::int32_t maximumRadiusTiles{};
-	bool diagnosticLogging{true};
+	bool diagnosticLogging{};
 	std::map<std::int32_t, SkillOverride> skillOverrides;
-	LegacyEvent20Suppression legacyEvent20Suppression;
 	bool requireCharmTier{};
 	std::vector<CharmTier> charmTiers;
 	bool enablePhysicalConversion{};
@@ -514,13 +523,6 @@ inline bool MatchesLegacyEvent20Suppression(
 		&& layer == static_cast<std::uint16_t>(suppression.layer);
 }
 
-inline bool MatchesLegacyEvent20Suppression(
-		const Config& config,
-		std::uint32_t packedStatAndLayer,
-		bool attackerIsPlayer) noexcept {
-	return config.enabled && MatchesLegacyEvent20Suppression(
-		config.legacyEvent20Suppression, packedStatAndLayer, attackerIsPlayer);
-}
 
 inline bool AppendUniqueSecondaryTarget(
 		std::vector<UnitIdentity>& targets,

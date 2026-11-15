@@ -4,6 +4,7 @@
 #include "melee_splash_bkvcombat_interop.hpp"
 #include "melee_splash_gameplay.hpp"
 #include "melee_splash_installer.h"
+#include "melee_splash_stat_lookup.hpp"
 
 #include <Windows.h>
 #include <intrin.h>
@@ -781,9 +782,8 @@ auto BuildMetadata(
     const auto radiusPercent = ActiveConfig.increasedRadiusStatId >= 0
         ? GetUnitStat(attacker, ActiveConfig.increasedRadiusStatId, 0)
         : 0;
-    const auto damagePercent = ActiveConfig.splashDamagePercentStatId >= 0
-        ? GetUnitStat(attacker, ActiveConfig.splashDamagePercentStatId, 0)
-        : 0;
+    const auto splashStatId = MeleeSplashStatIdForUnit(attacker);
+    const auto damagePercent = splashStatId >= 0 ? GetUnitStat(attacker, splashStatId, 0) : 0;
     metadata->baseRadiusTiles = metadata->exceptionalOrEliteWeapon
         ? ActiveConfig.baseRadiusExceptionalEliteWeapon
         : ActiveConfig.baseRadiusNormalWeapon;
@@ -2121,10 +2121,13 @@ std::int32_t __fastcall HookEvent20(
             && GetLayeredStat(attacker, statId, layer) > 0) {
         ActivePrimaryFrame->gateSeen = true;
     }
-    if (MatchesLegacyEvent20Suppression(
-            ActiveConfig,
-            packed,
-            attacker && Identity(attacker).type == UnitPlayer)) {
+    const bool playerAttacker = attacker && Identity(attacker).type == UnitPlayer;
+    const auto verifiedStat = playerAttacker
+        ? MeleeSplashStatIdForUnit(attacker) : UnresolvedMeleeSplashStatId;
+    const LegacyEvent20Suppression suppression{
+        .enabled = true, .statId = verifiedStat, .layer = 0,
+    };
+    if (MatchesLegacyEvent20Suppression(suppression, packed, playerAttacker)) {
         DiagnosticLog(
             "MeleeSplash suppressed configured legacy Event20 token=0x%08X.",
             packed);
@@ -2510,19 +2513,11 @@ auto LoadSkillNameIndex(
     return false;
 }
 
-auto LoadSettings(std::int32_t splashStatId) -> bool {
+auto LoadSettings() -> bool {
     ActiveConfig = Config{};
     ActiveConfig.enabled = true;
-    ActiveConfig.splashDamagePercentStatId = splashStatId;
     ActiveConfig.baseSplashDamagePercent = 0;
     ActiveConfig.enablePhysicalConversion = true;
-    ActiveConfig.diagnosticLogging = true;
-    ActiveConfig.legacyEvent20Suppression = {
-        .enabled = true,
-        .statId = splashStatId,
-        .layer = 0,
-        .playerAttackersOnly = true,
-    };
 
     std::array<char, 16 * 1024> toml{};
     std::uint32_t requiredSize{};
@@ -2562,6 +2557,7 @@ auto LoadSettings(std::int32_t splashStatId) -> bool {
         return false;
     }
     ActiveConfig.activationMode = skillSettings.activationMode;
+    ActiveConfig.diagnosticLogging = skillSettings.diagnosticLogging;
     ActiveConfig.baseRadiusNormalWeapon = skillSettings.normalWeaponRadiusTiles;
     ActiveConfig.baseRadiusExceptionalEliteWeapon =
         skillSettings.exceptionalEliteWeaponRadiusTiles;
@@ -2582,12 +2578,13 @@ auto LoadSettings(std::int32_t splashStatId) -> bool {
     char message[256]{};
     std::snprintf(message, sizeof(message),
         "MeleeSplash settings: mode=%s fixedSkillRows=%zu skillRadiusRows=%zu "
-        "radii=%d/%d.",
+        "radii=%d/%d diagnosticLogging=%s.",
         ActivationModeName(ActiveConfig.activationMode),
         skillSettings.fixedSplashDamagePercentBySkill.size(),
         skillSettings.radiusTilesBySkill.size(),
         ActiveConfig.baseRadiusNormalWeapon,
-        ActiveConfig.baseRadiusExceptionalEliteWeapon);
+        ActiveConfig.baseRadiusExceptionalEliteWeapon,
+        ActiveConfig.diagnosticLogging ? "on" : "off");
     Context->LogInfo(message);
     return true;
 }
@@ -2607,7 +2604,8 @@ auto Status(
         std::snprintf(
             message,
             sizeof(message),
-        "Melee Splash 0.3.7: enabled=%s operational=%s partial=%s config=%s "
+        "Melee Splash 1.3.9: enabled=%s operational=%s partial=%s config=%s "
+            "verifiedStatIds(Classic/LoD/RotW)=%d/%d/%d "
             "captures=%llu bursts=%llu secondaryHits=%llu rejectedHits=%llu "
             "rejectedTargets=%llu droppedSidecars=%llu.",
             ActiveConfig.enabled ? "true" : "false",
@@ -2615,6 +2613,7 @@ auto Status(
             AnyMutationInstalled.load(std::memory_order_acquire)
                 && !Operational.load(std::memory_order_acquire) ? "true" : "false",
             path.c_str(),
+            VerifiedMeleeSplashStatId(0), VerifiedMeleeSplashStatId(1), VerifiedMeleeSplashStatId(2),
             static_cast<unsigned long long>(Captures.load(std::memory_order_relaxed)),
             static_cast<unsigned long long>(Bursts.load(std::memory_order_relaxed)),
             static_cast<unsigned long long>(SecondaryHits.load(std::memory_order_relaxed)),
@@ -2624,12 +2623,13 @@ auto Status(
         command->plugin->WriteConsoleMessage(message);
     } catch (...) {
         command->plugin->WriteConsoleMessage(
-            "Melee Splash 0.3.7: status unavailable (allocation failure).");
+            "Melee Splash 1.3.9: status unavailable (allocation failure).");
     }
     return D2RL::ConsoleCommandResult::Handled;
 }
 
 void ResetState() noexcept {
+    ClearMeleeSplashStatBindings();
     Operational.store(false, std::memory_order_release);
     AnyMutationInstalled.store(false, std::memory_order_release);
     Sequence.store(0, std::memory_order_relaxed);
@@ -2668,7 +2668,7 @@ constexpr D2RL::PluginInfo Info{
     .abiVersion = D2RL_PLUGIN_ABI_VERSION,
     .id = "d2rl-melee-splash",
     .name = "Melee Splash",
-    .version = "0.3.7",
+    .version = "1.3.9",
     .author = "MadMike",
     .description = "Adds configurable melee splash damage to nearby monsters.",
     .flags = D2RL::PluginFlags::Server
@@ -2690,10 +2690,12 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(
     Base = context ? reinterpret_cast<std::uint8_t*>(context->exeBase) : nullptr;
     ResetState();
     if (!Context || !Base) return false;
-    const auto splashStatId = RunFirstRunInstall(context);
-    if (splashStatId < 0) return false;
+    const auto install = RunFirstRunInstall(context);
+    if (install.statId < 0) return false;
+    // The loader can already have compiled or loaded the old data this run.
+    if (install.restartRequired) return true;
     try {
-        if (!LoadSettings(splashStatId)) return false;
+        if (!LoadSettings()) return false;
     } catch (...) {
         Context->LogError(
             "MeleeSplash: failed while loading the plugin TOML settings.");
@@ -2701,7 +2703,7 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(
     }
     if (!ActiveConfig.enabled) {
         Context->LogInfo(
-            "Melee Splash 0.3.7 loaded disabled; no hooks installed.");
+            "Melee Splash 1.3.9 loaded disabled; no hooks installed.");
         if (!Context->RegisterConsoleCommand(
                 "melee-splash", Status, "Show Melee Splash status.")) {
             Context->LogWarn(
@@ -2712,6 +2714,7 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(
     // Native admission uses owned-site fingerprints, independent of build labels.
     ResolveNativeFunctions();
     if (!ValidateOwnedSites()) return false;
+    const bool watchingTables = RegisterMeleeSplashStatLookup(context, install.statId);
     if (!InstallHooks()) {
         Operational.store(false, std::memory_order_release);
         if (AnyMutationInstalled.load(std::memory_order_acquire)) {
@@ -2747,13 +2750,13 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(
         std::snprintf(
             message,
             sizeof(message),
-            "Melee Splash 0.3.7 by MadMike active; stat=%d config=%s.",
-            ActiveConfig.splashDamagePercentStatId,
+            "Melee Splash 1.3.9 by MadMike active; item splash=%s config=%s.",
+            watchingTables ? "awaiting loaded tables" : "disabled",
             path.c_str());
         Context->LogInfo(message);
     } catch (...) {
         Context->LogInfo(
-            "Melee Splash 0.3.7 by MadMike active; config path unavailable.");
+            "Melee Splash 1.3.9 by MadMike active; config path unavailable.");
     }
     return true;
 }
@@ -2761,6 +2764,7 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(
 D2RL_PLUGIN_EXPORT void D2RLoaderUnloadPlugin() noexcept {
     using namespace RuffnecKk::MeleeSplash;
     Operational.store(false, std::memory_order_release);
+    ClearMeleeSplashStatBindings();
     try {
         std::scoped_lock lock(SidecarMutex);
         Sidecars.clear();

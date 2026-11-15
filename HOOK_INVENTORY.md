@@ -6,16 +6,16 @@
 |---|---|
 | Plugin name | Melee Splash |
 | Plugin ID | d2rl-melee-splash |
-| Release version | 0.3.7 |
-| Inventory updated | 2026-11-08 |
-| Source revision | v0.3.7 (release tag) |
-| D2R build(s) audited | Not validated |
+| Release version | Unreleased |
+| Inventory updated | 2026-11-15 |
+| Source revision | v1.3.9 source |
+| D2R build(s) audited | D2R 3.4.95032 with D2RLoader 1.3.1-beta (normal melee and item splash) |
 | D2RLoader SDK / Plugin ABI | PluginSDK 0.4.0 / Plugin ABI 4 |
-| Audit status | Partial — source sites audited; in-game target-build validation not performed |
+| Audit status | Partial |
 
 ## Scope and method
 
-Inspected src/plugin.cpp, src/pre_conversion.asm, src/plugin.rc, build-plugin.cmd, README.md, and RELEASE_NOTES_v0.3.7.md. This inventory covers plugin-owned inline detours and call-site patches. D2RLoader callbacks and native functions called only as helpers are not hook sites. The v0.3.7 rebuild changes compile/link settings and version strings only; hook sites and validation witnesses match v0.3.6.
+Inspected src/plugin.cpp, src/pre_conversion.asm, src/stat_lookup.cpp, and the installer. This inventory covers plugin-owned inline detours and call-site patches. Hook sites are unchanged from v0.3.7. The loaded-table listener in src/stat_lookup.cpp reads the active ItemStatCost tables, checks the stat name and record ID, and installs no native hooks or patches.
 
 All addresses are RVAs relative to the D2R executable module base and are written in hexadecimal. The plugin checks expected instruction bytes and structural witnesses before patching. Inline hooks use SDK InstallInlineHook; call-site redirects encode a rel32 CALL to a nearby relay and apply it through expected-byte-checked PatchBytes. Physical-conversion and source-roll call patches are conditional on configuration; skill-input hooks are native executable inline hooks, not OS input hooks.
 
@@ -48,8 +48,6 @@ All addresses are RVAs relative to the D2R executable module base and are writte
 
 ## Known collision overlaps
 
-List only overlaps supported by the current source audit. Include the other plugin and shared target. If none are known, write “None identified in the current inventory; this is not a compatibility guarantee.”
-
 | Other plugin | Shared target | Relationship | Evidence / notes |
 |---|---|---|---|
 | RuffDood Cast Triggers | EventFunc15, RVA 0x584170 | Same inline entry | Source directory plugins/cast-triggers; listed in the workspace aggregate inventory. |
@@ -58,4 +56,4 @@ List only overlaps supported by the current source audit. Include the other plug
 
 ## Audit notes
 
-Two validation-only locations are not patched: ActiveSkillLayoutWitnessRva at RVA 0x33DBA0 and DirectMeleeFillContextRva at RVA 0x43009E. The source contains no vtable hooks or OS-level input/message hooks. Expected-byte checks fail closed before mutation when a required fingerprint does not match. D2R build-specific runtime behavior was not validated in-game for this release.
+The active skill layout and direct melee fill context are validation sites. The stat lookup also checks native accessor and linker bytes before reading loaded tables. The source contains no vtable hooks or OS input/message hooks. The user verified combat with a moved stat and combat logging disabled on the audited build; other builds and every optional skill path were not tested.

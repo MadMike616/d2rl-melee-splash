@@ -1,4 +1,5 @@
 #include "melee_splash_installer.h"
+#include "melee_splash_stat_lookup.hpp"
 #include "install_resource_ids.h"
 
 #include <D2RLPlugin/context.h>
@@ -11,7 +12,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
-#include <cwchar>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -22,7 +23,6 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -36,14 +36,18 @@ using Bytes = std::vector<std::uint8_t>;
 using Columns = std::map<std::string, std::size_t>;
 
 constexpr wchar_t InstallMutexName[] = L"Local\\D2RLoader.ModFirstRunInstall.v1";
-constexpr std::int32_t MaximumStatId = 1023;
 constexpr std::int32_t MaximumPropertyId = 65535;
-constexpr std::string_view StatName = "item_melee_splash";
+constexpr std::string_view StatName = MeleeSplashStatName;
 constexpr std::string_view PropertyName = "meleesplash";
 constexpr std::string_view ModifierStringKey = "D2RLMeleeSplashDamage";
-constexpr std::string_view ModifierString = "%d%% melee splash damage";
 constexpr std::string_view SuffixName = "of Splashing";
-constexpr std::string_view SuffixString = "of Splashing";
+constexpr std::array<const wchar_t*, 5> RequiredFiles{
+	L"data/global/excel/itemstatcost.txt",
+	L"data/global/excel/properties.txt",
+	L"data/global/excel/magicsuffix.txt",
+	L"data/local/lng/strings/item-modifiers.json",
+	L"data/local/lng/strings/item-nameaffixes.json",
+};
 
 class FirstRunInstallLock {
 public:
@@ -97,44 +101,21 @@ auto BytesToString(const Bytes& bytes) -> std::string {
 	return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
 }
 
-auto StringToBytes(std::string_view text) -> Bytes {
-	return Bytes(text.begin(), text.end());
+auto PathText(fs::path path) -> std::string {
+	const auto utf8 = path.make_preferred().u8string();
+	return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
 }
 
 auto ReadFile(const fs::path& path) -> Bytes {
 	std::ifstream stream(path, std::ios::binary);
 	if (!stream) {
-		throw std::runtime_error("could not open an installation target");
+		throw std::runtime_error("could not open " + PathText(path));
 	}
 	return Bytes(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
 }
 
 auto ReadText(const fs::path& path) -> std::string {
 	return BytesToString(ReadFile(path));
-}
-
-auto ReadTextOrCascBase(const fs::path& path, const fs::path& cascBasePath) -> std::string {
-	std::error_code error;
-	const bool exists = fs::exists(path, error);
-	if (error) {
-		throw std::runtime_error("could not inspect an installation target");
-	}
-	if (exists) {
-		if (!fs::is_regular_file(path, error) || error) {
-			throw std::runtime_error("an installation target exists but is not a regular file");
-		}
-		return ReadText(path);
-	}
-	const bool baseExists = fs::exists(cascBasePath, error);
-	if (error || !baseExists) {
-		throw std::runtime_error(
-			"missing CASC-extracted base file: " + cascBasePath.filename().string());
-	}
-	if (!fs::is_regular_file(cascBasePath, error) || error) {
-		throw std::runtime_error(
-			"CASC-extracted base path is not a regular file: " + cascBasePath.filename().string());
-	}
-	return ReadText(cascBasePath);
 }
 
 auto SplitLines(std::string_view text) -> std::vector<std::string> {
@@ -313,7 +294,13 @@ auto AppendRows(std::string_view existing, const std::vector<std::string>& rows)
 	return result;
 }
 
-auto MergeItemStatCost(std::string_view existing) -> std::pair<std::string, std::int32_t> {
+struct StatMerge {
+	std::string text;
+	std::int32_t id;
+	std::set<std::string> tooltipKeys;
+};
+
+auto MergeItemStatCost(std::string_view existing) -> StatMerge {
 	const auto lines = SplitLines(existing);
 	if (lines.empty()) {
 		throw std::runtime_error("itemstatcost.txt is empty");
@@ -325,53 +312,43 @@ auto MergeItemStatCost(std::string_view existing) -> std::pair<std::string, std:
 	const auto positiveStringColumn = RequireColumn(columns, "descstrpos");
 	const auto negativeStringColumn = RequireColumn(columns, "descstrneg");
 	std::set<std::int32_t> usedIds;
-	std::optional<std::size_t> statLine;
-	std::int32_t statId = -1;
-	std::vector<std::string> addedRows;
-	auto result = std::string(existing);
-	for (std::size_t lineIndex = 1; lineIndex < lines.size(); ++lineIndex) {
-		auto fields = NormalizeTsvFields(lines[lineIndex], header.size());
+	std::set<std::int32_t> duplicateIds;
+	std::optional<std::int32_t> statId;
+	std::set<std::string> tooltipKeys;
+	for (std::size_t i = 1; i < lines.size(); ++i) {
+		const auto fields = NormalizeTsvFields(lines[i], header.size());
 		if (!fields[idColumn].empty()) {
 			const auto id = ReadInteger(fields[idColumn], "an item-stat ID");
-			if (id >= 0 && id <= MaximumStatId) {
-				usedIds.insert(id);
+			if (id >= 0 && id <= MaximumMeleeSplashStatId && !usedIds.insert(id).second) {
+				duplicateIds.insert(id);
 			}
 		}
-		if (fields[statColumn] != StatName) {
-			continue;
-		}
-		if (statLine.has_value()) {
+		if (fields[statColumn] != StatName) continue;
+		if (statId.has_value()) {
 			throw std::runtime_error("itemstatcost.txt contains duplicate melee-splash stat rows");
 		}
-		statLine = lineIndex;
 		statId = ReadInteger(fields[idColumn], "the melee-splash stat ID");
-		if (statId < 0 || statId > MaximumStatId) {
-			throw std::runtime_error("the existing melee-splash stat ID is outside the supported range");
-		}
-		fields[positiveStringColumn] = std::string(ModifierStringKey);
-		fields[negativeStringColumn] = std::string(ModifierStringKey);
-		const auto replacement = JoinTsv(fields);
-		if (replacement != lines[lineIndex]) {
-			const auto position = result.find(lines[lineIndex]);
-			if (position == std::string::npos) {
-				throw std::runtime_error("could not update the existing melee-splash stat row safely");
-			}
-			result.replace(position, lines[lineIndex].size(), replacement);
+		for (const auto column : {positiveStringColumn, negativeStringColumn}) {
+			if (!fields[column].empty()) tooltipKeys.insert(fields[column]);
 		}
 	}
-	if (statLine.has_value()) {
-		return { std::move(result), statId };
+	if (statId.has_value()) {
+		if (*statId < 0 || *statId > MaximumMeleeSplashStatId || duplicateIds.contains(*statId)) {
+			throw std::runtime_error("the existing melee-splash stat ID is invalid or shared with another row");
+		}
+		return {std::string(existing), *statId, std::move(tooltipKeys)};
 	}
-	statId = ChooseFreeId(usedIds, 398, MaximumStatId);
-	addedRows.push_back(BuildResourceRow(
+
+	const auto selectedId = ChooseFreeId(usedIds, 398, MaximumMeleeSplashStatId);
+	const auto row = BuildResourceRow(
 		IDR_MELEESPLASH_ITEMSTATCOST, header,
-		{{"Stat", std::string(StatName)}, {"*ID", std::to_string(statId)},
+		{{"Stat", std::string(StatName)}, {"*ID", std::to_string(selectedId)},
 		 {"descstrpos", std::string(ModifierStringKey)}, {"descstrneg", std::string(ModifierStringKey)}},
-		{"Stat", "*ID", "descstrpos", "descstrneg"}));
-	return { AppendRows(result, addedRows), statId };
+		{"Stat", "*ID", "descstrpos", "descstrneg"});
+	return {AppendRows(existing, {row}), selectedId, {std::string(ModifierStringKey)}};
 }
 
-auto MergeProperties(std::string_view existing) -> std::pair<std::string, std::int32_t> {
+auto MergeProperties(std::string_view existing) -> std::string {
 	const auto lines = SplitLines(existing);
 	if (lines.empty()) {
 		throw std::runtime_error("properties.txt is empty");
@@ -382,18 +359,17 @@ auto MergeProperties(std::string_view existing) -> std::pair<std::string, std::i
 	const auto idColumn = RequireColumn(columns, "*Id");
 	const auto statColumn = RequireColumn(columns, "stat1");
 	std::set<std::int32_t> usedIds;
+	std::set<std::int32_t> duplicateIds;
 	std::optional<std::int32_t> propertyId;
-	for (std::size_t lineIndex = 1; lineIndex < lines.size(); ++lineIndex) {
-		const auto fields = NormalizeTsvFields(lines[lineIndex], header.size());
+	for (std::size_t i = 1; i < lines.size(); ++i) {
+		const auto fields = NormalizeTsvFields(lines[i], header.size());
 		if (!fields[idColumn].empty()) {
 			const auto id = ReadInteger(fields[idColumn], "a property ID");
-			if (id >= 0 && id <= MaximumPropertyId) {
-				usedIds.insert(id);
+			if (id >= 0 && id <= MaximumPropertyId && !usedIds.insert(id).second) {
+				duplicateIds.insert(id);
 			}
 		}
-		if (fields[codeColumn] != PropertyName) {
-			continue;
-		}
+		if (fields[codeColumn] != PropertyName) continue;
 		if (propertyId.has_value()) {
 			throw std::runtime_error("properties.txt contains duplicate melee-splash properties");
 		}
@@ -403,7 +379,10 @@ auto MergeProperties(std::string_view existing) -> std::pair<std::string, std::i
 		propertyId = ReadInteger(fields[idColumn], "the melee-splash property ID");
 	}
 	if (propertyId.has_value()) {
-		return { std::string(existing), *propertyId };
+		if (*propertyId < 0 || *propertyId > MaximumPropertyId || duplicateIds.contains(*propertyId)) {
+			throw std::runtime_error("the existing melee-splash property ID is invalid or shared with another row");
+		}
+		return std::string(existing);
 	}
 	const auto selectedId = ChooseFreeId(usedIds, 314, MaximumPropertyId);
 	const auto row = BuildResourceRow(
@@ -411,51 +390,58 @@ auto MergeProperties(std::string_view existing) -> std::pair<std::string, std::i
 		{{"code", std::string(PropertyName)}, {"*Id", std::to_string(selectedId)},
 		 {"stat1", std::string(StatName)}},
 		{"code", "*Id", "stat1"});
-	return { AppendRows(existing, {row}), selectedId };
+	return AppendRows(existing, {row});
 }
 
-auto MergeMagicSuffix(std::string_view existing) -> std::string {
-	const auto existingLines = SplitLines(existing);
-	if (existingLines.empty()) {
+struct SuffixMerge {
+	std::string text;
+	std::set<std::string> affixKeys;
+};
+
+auto MergeMagicSuffix(std::string_view existing) -> SuffixMerge {
+	const auto lines = SplitLines(existing);
+	if (lines.empty()) {
 		throw std::runtime_error("magicsuffix.txt is empty");
 	}
-	const auto header = ParseHeader(existingLines.front());
+	const auto header = ParseHeader(lines.front());
 	const auto columns = MakeColumns(header);
 	const auto nameColumn = RequireColumn(columns, "Name");
 	const auto typeColumn = RequireColumn(columns, "itype1");
 	const auto propertyColumn = RequireColumn(columns, "mod1code");
-	const auto minimumColumn = RequireColumn(columns, "mod1min");
-	const auto maximumColumn = RequireColumn(columns, "mod1max");
 	const auto sourceLines = SplitLines(BytesToString(ResourceBytes(IDR_MELEESPLASH_MAGICSUFFIX)));
 	if (sourceLines.size() != 4) {
 		throw std::runtime_error("the embedded charm suffix template must have three rows");
 	}
 	const auto sourceHeader = ParseHeader(sourceLines.front());
 	std::vector<std::string> missing;
+	std::set<std::string> affixKeys;
 	for (std::size_t templateIndex = 1; templateIndex < sourceLines.size(); ++templateIndex) {
 		const auto mapped = MapTemplateRow(
 			sourceHeader, sourceLines[templateIndex], header, {},
 			{"Name", "itype1", "mod1code", "mod1min", "mod1max"});
 		const auto expected = NormalizeTsvFields(mapped, header.size());
 		bool found = false;
-		for (std::size_t lineIndex = 1; lineIndex < existingLines.size(); ++lineIndex) {
-			const auto fields = NormalizeTsvFields(existingLines[lineIndex], header.size());
-			if (fields[nameColumn] != SuffixName || fields[typeColumn] != expected[typeColumn]) {
-				continue;
+		bool conflictingName = false;
+		for (std::size_t i = 1; i < lines.size(); ++i) {
+			const auto fields = NormalizeTsvFields(lines[i], header.size());
+			if (fields[typeColumn] != expected[typeColumn]) continue;
+			if (fields[propertyColumn] == PropertyName) {
+				if (fields[nameColumn].empty()) throw std::runtime_error("a melee-splash charm suffix has no name");
+				affixKeys.insert(fields[nameColumn]);
+				found = true;
+			} else if (fields[nameColumn] == SuffixName) {
+				conflictingName = true;
 			}
-			if (found || fields != expected
-				|| fields[propertyColumn] != PropertyName
-				|| fields[minimumColumn] != expected[minimumColumn]
-				|| fields[maximumColumn] != expected[maximumColumn]) {
-				throw std::runtime_error("magicsuffix.txt has a conflicting of Splashing charm row");
-			}
-			found = true;
 		}
 		if (!found) {
+			if (conflictingName) {
+				throw std::runtime_error("magicsuffix.txt has a conflicting of Splashing charm row");
+			}
 			missing.push_back(mapped);
+			affixKeys.emplace(SuffixName);
 		}
 	}
-	return AppendRows(existing, missing);
+	return {AppendRows(existing, missing), std::move(affixKeys)};
 }
 
 auto IsWhitespace(char value) noexcept -> bool {
@@ -480,6 +466,21 @@ auto ExtractJsonObjects(std::string_view source) -> std::vector<std::string> {
 			}
 			continue;
 		}
+		if (character == '/' && i + 1 < source.size()) {
+			if (source[i + 1] == '/') {
+				i = source.find('\n', i + 2);
+				if (i == std::string_view::npos) break;
+				continue;
+			}
+			if (source[i + 1] == '*') {
+				const auto end = source.find("*/", i + 2);
+				if (end == std::string_view::npos) {
+					throw std::runtime_error("a localization JSON file has an unterminated comment");
+				}
+				i = end + 1;
+				continue;
+			}
+		}
 		if (character == '"') {
 			inString = true;
 		} else if (character == '{') {
@@ -503,106 +504,118 @@ auto ExtractJsonObjects(std::string_view source) -> std::vector<std::string> {
 	return objects;
 }
 
-auto JsonStringProperty(const std::string& object, std::string_view name) -> std::optional<std::string> {
-	const std::regex expression("\\\"" + std::string(name) + "\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"\\\\])*)\\\"");
+auto JsonKey(const std::string& object) -> std::optional<std::string> {
+	static const std::regex expression(R"REGEX("Key"\s*:\s*"((?:\\.|[^"\\])*)")REGEX");
 	std::smatch match;
-	if (!std::regex_search(object, match, expression) || match.size() < 2) {
-		return std::nullopt;
-	}
+	if (!std::regex_search(object, match, expression)) return std::nullopt;
 	return match[1].str();
 }
 
-auto JsonNumericProperty(const std::string& object, std::string_view name) -> std::optional<std::uint32_t> {
-	const std::regex expression("\\\"" + std::string(name) + "\\\"\\s*:\\s*(\\d+)");
-	std::smatch match;
-	if (!std::regex_search(object, match, expression) || match.size() < 2) {
-		return std::nullopt;
+auto LocalizationKeys(std::string_view text) -> std::set<std::string> {
+	const auto first = text.find_first_not_of(" \t\r\n\xEF\xBB\xBF");
+	const auto close = text.find_last_not_of(" \t\r\n");
+	if (first == std::string_view::npos || text[first] != '[' || text[close] != ']') {
+		throw std::runtime_error("a localization file is not a top-level JSON array");
 	}
-	const auto parsed = std::stoul(match[1].str());
-	if (parsed > 65535) {
-		return std::nullopt;
+	std::set<std::string> keys;
+	for (const auto& object : ExtractJsonObjects(text)) {
+		if (auto key = JsonKey(object); key.has_value()) {
+			keys.insert(std::move(*key));
+		}
 	}
-	return static_cast<std::uint32_t>(parsed);
+	return keys;
+}
+
+void CollectLocalizationIds(std::string_view text, std::set<std::uint32_t>& ids) {
+	for (std::size_t i = 0; i < text.size();) {
+		if (text.substr(i).starts_with("//")) {
+			i = text.find('\n', i + 2);
+			if (i == std::string_view::npos) break;
+			continue;
+		}
+		if (text.substr(i).starts_with("/*")) {
+			const auto end = text.find("*/", i + 2);
+			if (end == std::string_view::npos) throw std::runtime_error("an unterminated localization comment was found");
+			i = end + 2;
+			continue;
+		}
+		if (text[i++] != '"') continue;
+		const auto start = i;
+		while (i < text.size() && text[i] != '"') {
+			if (text[i++] == '\\' && i < text.size()) ++i;
+		}
+		if (i == text.size()) throw std::runtime_error("an unterminated localization string was found");
+		const bool isId = text.substr(start, i - start) == "id";
+		++i;
+		if (!isId) continue;
+		const auto colon = text.find_first_not_of(" \t\r\n", i);
+		if (colon == std::string_view::npos || text[colon] != ':') continue;
+		const auto digit = text.find_first_not_of(" \t\r\n", colon + 1);
+		if (digit == std::string_view::npos || text[digit] < '0' || text[digit] > '9') continue;
+		std::uint32_t id{};
+		const auto [end, error] = std::from_chars(text.data() + digit, text.data() + text.size(), id);
+		if (error == std::errc{}) ids.insert(id);
+		i = static_cast<std::size_t>(end - text.data());
+	}
 }
 
 auto MergeLocalizedJson(
 		std::string_view existing,
 		int resourceId,
 		std::string_view expectedKey,
-		std::string_view expectedEnglish) -> std::string {
+		std::set<std::uint32_t>& usedIds) -> std::string {
 	const auto first = existing.find_first_not_of(" \t\r\n\xEF\xBB\xBF");
 	const auto close = existing.find_last_not_of(" \t\r\n");
-	if (first == std::string_view::npos || close == std::string_view::npos
-		|| existing[first] != '[' || existing[close] != ']') {
-		throw std::runtime_error("a localization file is not a top-level JSON array");
-	}
-	const auto objects = ExtractJsonObjects(existing);
-	std::set<std::uint32_t> usedIds;
-	bool keyAlreadyExists = false;
-	for (const auto& object : objects) {
-		if (const auto id = JsonNumericProperty(object, "id"); id.has_value()) {
-			usedIds.insert(*id);
-		}
-		const auto key = JsonStringProperty(object, "Key");
-		if (!key.has_value() || *key != expectedKey) {
-			continue;
-		}
-		const auto english = JsonStringProperty(object, "enUS");
-		if (!english.has_value() || *english != expectedEnglish) {
-			throw std::runtime_error("a localization key already exists with different English text");
-		}
-		keyAlreadyExists = true;
-	}
-	if (keyAlreadyExists) {
-		return std::string(existing);
-	}
-
 	const auto templates = ExtractJsonObjects(BytesToString(ResourceBytes(resourceId)));
-	if (templates.size() != 1) {
+	if (templates.size() != 1
+		|| JsonKey(templates.front()) != std::optional<std::string>(expectedKey)) {
 		throw std::runtime_error("an embedded localization template has an unexpected layout");
 	}
 	auto addition = templates.front();
-	if (JsonStringProperty(addition, "Key") != std::optional<std::string>(expectedKey)
-		|| JsonStringProperty(addition, "enUS") != std::optional<std::string>(expectedEnglish)) {
-		throw std::runtime_error("an embedded localization template has unexpected text");
-	}
-	std::uint32_t candidate = usedIds.empty() ? 1 : (*usedIds.rbegin() < 65535 ? *usedIds.rbegin() + 1 : 1);
-	bool found = false;
-	for (std::uint32_t attempt = 0; attempt < 65535; ++attempt) {
-		if (candidate == 0 || candidate > 65535) {
-			candidate = 1;
-		}
-		if (usedIds.find(candidate) == usedIds.end()) {
-			found = true;
-			break;
-		}
-		++candidate;
-	}
-	if (!found) {
-		throw std::runtime_error("a localization file has no free string ID");
-	}
-	const std::regex zeroId(R"REGEX("id"\s*:\s*0(?!\d))REGEX");
+	std::uint32_t candidate = 63000;
+	while (candidate < 65000 && !usedIds.insert(candidate).second) ++candidate;
+	if (candidate == 65000) throw std::runtime_error("no free melee-splash localization ID is available");
+
+	static const std::regex zeroId(R"REGEX("id"\s*:\s*0(?!\d))REGEX");
 	std::smatch zeroIdMatch;
-	if (JsonNumericProperty(addition, "id") != std::optional<std::uint32_t>(0)
-		|| !std::regex_search(addition, zeroIdMatch, zeroId)) {
+	if (!std::regex_search(addition, zeroIdMatch, zeroId)) {
 		throw std::runtime_error("an embedded localization template has no zero string ID");
 	}
-	const auto zeroPosition = static_cast<std::size_t>(
-		zeroIdMatch.position() + zeroIdMatch.length() - 1);
+	const auto zeroPosition = static_cast<std::size_t>(zeroIdMatch.position() + zeroIdMatch.length() - 1);
 	addition.replace(zeroPosition, 1, std::to_string(candidate));
 
-	const auto arrayOpen = existing.find('[', first);
-	const auto innerStart = arrayOpen + 1;
-	std::size_t innerEnd = close;
-	while (innerEnd > innerStart && IsWhitespace(existing[innerEnd - 1])) {
-		--innerEnd;
+	std::size_t last = first;
+	bool inString = false;
+	bool escaped = false;
+	for (std::size_t i = first + 1; i < close; ++i) {
+		const auto ch = existing[i];
+		if (inString) {
+			if (escaped) escaped = false;
+			else if (ch == '\\') escaped = true;
+			else if (ch == '"') inString = false;
+		} else if (existing.substr(i).starts_with("//")) {
+			i = existing.find('\n', i + 2);
+			if (i == std::string_view::npos || i >= close) break;
+			continue;
+		} else if (existing.substr(i).starts_with("/*")) {
+			const auto end = existing.find("*/", i + 2);
+			if (end == std::string_view::npos || end >= close) {
+				throw std::runtime_error("a localization JSON file has an unterminated comment");
+			}
+			i = end + 1;
+			continue;
+		} else if (ch == '"') {
+			inString = true;
+		}
+		if (!IsWhitespace(ch)) last = i;
 	}
-	const bool hasEntries = existing.find_first_not_of(" \t\r\n", innerStart) < close;
-	std::string result(existing.substr(0, innerEnd));
-	if (hasEntries && result.back() != ',') {
-		result.push_back(',');
+	if (existing[last] != '[' && existing[last] != '}' && existing[last] != ',') {
+		throw std::runtime_error("a localization JSON array has an unsupported ending");
 	}
 	const std::string newline = existing.find("\r\n") == std::string_view::npos ? "\n" : "\r\n";
+	std::string result(existing.substr(0, last + 1));
+	if (existing[last] == '}') result += ',';
+	result.append(existing.substr(last + 1, close - last - 1));
 	result += newline;
 	result += addition;
 	result += newline;
@@ -610,81 +623,107 @@ auto MergeLocalizedJson(
 	return result;
 }
 
-auto FindActiveModRoot(const D2RL::PluginContext* context) -> fs::path {
-	if (context == nullptr || context->activeMod == nullptr || context->activeMod[0] == '\0') {
-		return {};
+bool SameName(const fs::path& left, const fs::path& right) {
+	return CompareStringOrdinal(left.c_str(), -1, right.c_str(), -1, TRUE) == CSTR_EQUAL;
+}
+
+bool IsWithin(const fs::path& root, const fs::path& path) {
+	auto candidate = path.begin();
+	for (const auto& component : root) {
+		if (candidate == path.end() || !SameName(component, *candidate)) return false;
+		++candidate;
 	}
-	const fs::path activeMod(context->activeMod);
+	return candidate != path.end();
+}
+
+struct ModPaths {
+	fs::path dataRoot;
+	fs::path loaderRoot;
+	fs::path configFile;
+};
+
+auto FindModPaths(const D2RL::PluginContext* context) -> ModPaths {
+	if (context == nullptr || !context->activeMod || !context->activeMod[0]
+		|| !context->pluginConfigPath || !context->pluginConfigPath[0]) {
+		throw std::runtime_error("D2RLoader did not provide the active mod and plugin configuration path");
+	}
+	const std::string_view name(context->activeMod);
+	const fs::path activeMod(std::u8string(name.begin(), name.end()));
 	if (activeMod.has_parent_path() || activeMod.has_root_path()
 		|| activeMod == L"." || activeMod == L".." || activeMod.filename() != activeMod) {
-		return {};
+		throw std::runtime_error("D2RLoader provided an invalid active mod name");
 	}
-	std::vector<fs::path> candidates;
-	const fs::path modDirectory = context->modDirectory == nullptr ? fs::path{} : fs::path(context->modDirectory);
-	const fs::path scopeRoot = context->scopeRootDirectory == nullptr ? fs::path{} : fs::path(context->scopeRootDirectory);
-	const auto packageName = activeMod.native() + std::wstring(L".mpq");
-	const auto addBase = [&](const fs::path& base) {
-		if (base.empty()) {
-			return;
-		}
-		candidates.push_back(base / activeMod / packageName);
-		candidates.push_back(base / packageName);
-		candidates.push_back(base / activeMod);
-		candidates.push_back(base);
-	};
-	addBase(modDirectory);
-	if (!scopeRoot.empty()) {
-		candidates.push_back(scopeRoot / activeMod / packageName);
-		candidates.push_back(scopeRoot / packageName);
-		candidates.push_back(scopeRoot / activeMod);
-		candidates.push_back(scopeRoot / L"mods" / activeMod / packageName);
-		addBase(scopeRoot);
+
+	const auto configFile = fs::absolute(context->pluginConfigPath).lexically_normal();
+	const auto configDirectory = configFile.parent_path();
+	const auto loaderDirectory = configDirectory.parent_path();
+	const auto modDirectory = loaderDirectory.parent_path();
+	if (!SameName(configDirectory.filename(), L"config") || !SameName(loaderDirectory.filename(), L"d2rloader")
+		|| !SameName(modDirectory.filename(), activeMod)) {
+		throw std::runtime_error("D2RLoader's configuration is not inside the active mod: " + PathText(configFile));
 	}
-	constexpr std::array<const wchar_t*, 5> targets{
-		L"data/global/excel/itemstatcost.txt",
-		L"data/global/excel/properties.txt",
-		L"data/global/excel/magicsuffix.txt",
-		L"data/local/lng/strings/item-modifiers.json",
-		L"data/local/lng/strings/item-nameaffixes.json",
-	};
-	std::set<std::wstring> seen;
-	std::optional<fs::path> bestCandidate;
-	std::size_t bestFileCount = 0;
-	for (const auto& candidate : candidates) {
-		const auto normalized = candidate.lexically_normal();
-		if (!seen.insert(normalized.native()).second) {
-			continue;
-		}
-		const auto folderName = normalized.filename();
-		if (folderName != activeMod && folderName != fs::path(packageName)) {
-			continue;
-		}
-		std::error_code error;
-		if (!fs::is_directory(normalized, error) || error) {
-			continue;
-		}
-		std::size_t fileCount = 0;
-		for (const auto* relative : targets) {
-			const auto target = normalized / relative;
-			error.clear();
-			if (fs::exists(target, error) && !error
-				&& fs::is_regular_file(target, error) && !error) {
-				++fileCount;
-			}
-			if (error) {
-				fileCount = 0;
-				break;
-			}
-		}
-		if (!bestCandidate.has_value() || fileCount > bestFileCount) {
-			bestCandidate = normalized;
-			bestFileCount = fileCount;
-		}
-		if (fileCount == targets.size()) {
-			return normalized;
+
+	const auto modRoot = fs::canonical(modDirectory);
+	const auto loaderRoot = fs::weakly_canonical(loaderDirectory);
+	if (!IsWithin(modRoot, loaderRoot) || !IsWithin(loaderRoot, fs::weakly_canonical(configFile))) {
+		throw std::runtime_error("D2RLoader's configuration path points outside the active mod");
+	}
+	const auto package = modRoot / (activeMod.native() + L".mpq");
+	if (!fs::exists(package) && fs::is_directory(modRoot / L"data")) {
+		return {modRoot, loaderRoot, configFile};
+	}
+	const auto dataRoot = fs::weakly_canonical(package);
+	if (!IsWithin(modRoot, dataRoot)) {
+		throw std::runtime_error("the loose data package points outside the active mod");
+	}
+	return {dataRoot, loaderRoot, configFile};
+}
+
+bool CheckRequiredFile(const D2RL::PluginContext& context, const fs::path& root, const fs::path& relative) {
+	const auto path = root / relative;
+	std::error_code error;
+	const auto status = fs::status(path, error);
+	if (fs::is_regular_file(status)) {
+		const auto resolved = fs::canonical(path, error);
+		if (!error && IsWithin(root, resolved) && !fs::is_symlink(fs::symlink_status(path))) return true;
+	}
+	const auto message = std::string(status.type() == fs::file_type::not_found
+		? "Melee Splash: missing required file. Put it here: "
+		: "Melee Splash: expected a readable, loose file inside the mod here: ") + PathText(path);
+	context.LogError(message.c_str());
+	return false;
+}
+
+auto ReadModText(const fs::path& root, const fs::path& relative) -> std::string {
+	const auto path = root / relative;
+	const auto resolved = fs::canonical(path);
+	if (!IsWithin(root, resolved) || !fs::is_regular_file(resolved) || fs::is_symlink(fs::symlink_status(path))) {
+		throw std::runtime_error("invalid mod file: " + PathText(path));
+	}
+	return ReadText(resolved);
+}
+
+auto ReadLocalizationIds(const fs::path& root) -> std::set<std::uint32_t> {
+	const fs::path directory(L"data/local/lng/strings");
+	std::set<std::uint32_t> used;
+	for (const auto& file : fs::directory_iterator(root / directory)) {
+		if (!SameName(file.path().extension(), L".json") || !file.is_regular_file()) continue;
+		try {
+			CollectLocalizationIds(ReadModText(root, directory / file.path().filename()), used);
+		} catch (const std::exception& error) {
+			throw std::runtime_error("could not index string IDs in " + PathText(file.path()) + ": " + error.what());
 		}
 	}
-	return bestCandidate.value_or(fs::path{});
+	return used;
+}
+
+void RequireCustomStrings(const std::set<std::string>& expected, const std::set<std::string>& present,
+		std::string_view builtIn, const fs::path& path) {
+	for (const auto& key : expected) {
+		if (key != builtIn && !present.contains(key)) {
+			throw std::runtime_error("missing custom localization key " + key + " in " + PathText(path));
+		}
+	}
 }
 
 auto Timestamp() -> std::wstring {
@@ -701,182 +740,81 @@ auto Timestamp() -> std::wstring {
 	return buffer;
 }
 
-void WriteAtomic(const fs::path& target, const Bytes& data) {
-	std::error_code error;
-	fs::create_directories(target.parent_path(), error);
-	if (error) {
-		throw std::runtime_error("could not create an installation directory");
-	}
-	const auto temporary = target.wstring() + L".d2rl-melee-splash-" + std::to_wstring(GetCurrentProcessId()) + L".tmp";
-	{
-		std::ofstream stream(fs::path(temporary), std::ios::binary | std::ios::trunc);
-		if (!stream) {
-			throw std::runtime_error("could not create a temporary installation file");
+void WriteAtomic(const fs::path& target, std::string_view data, bool replaceExisting = true) {
+	fs::create_directories(target.parent_path());
+	auto temporary = target;
+	temporary += L".d2rl-melee-splash-" + std::to_wstring(GetCurrentProcessId())
+		+ L"-" + std::to_wstring(GetTickCount64()) + L".tmp";
+	try {
+		std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
+		stream.write(data.data(), static_cast<std::streamsize>(data.size()));
+		stream.close();
+		const auto flags = MOVEFILE_WRITE_THROUGH | (replaceExisting ? MOVEFILE_REPLACE_EXISTING : 0);
+		if (!stream || !MoveFileExW(temporary.c_str(), target.c_str(), flags)) {
+			throw std::runtime_error("could not write " + PathText(target));
 		}
-		stream.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
-		stream.flush();
-		if (!stream) {
-			stream.close();
-			fs::remove(temporary, error);
-			throw std::runtime_error("could not write a temporary installation file");
-		}
-	}
-	if (!MoveFileExW(temporary.c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-		fs::remove(temporary, error);
-		throw std::runtime_error("could not atomically replace an installation file");
+	} catch (...) {
+		std::error_code ignored;
+		fs::remove(temporary, ignored);
+		throw;
 	}
 }
 
-auto MarkerStatId(const fs::path& markerPath) -> std::optional<std::int32_t> {
-	std::error_code error;
-	const bool exists = fs::exists(markerPath, error);
-	if (error) {
-		throw std::runtime_error("could not inspect the melee-splash TOML marker");
-	}
-	if (!exists) {
-		return std::nullopt;
-	}
-	if (!fs::is_regular_file(markerPath, error) || error) {
-		throw std::runtime_error("the melee-splash TOML marker path is not a regular file");
-	}
-	const auto marker = ReadText(markerPath);
-	const std::regex complete(
-		R"REGEX((?:^|\n)[ \t]*complete[ \t]*=[ \t]*true[ \t]*(?:\r?\n|$))REGEX",
-		std::regex_constants::icase);
-	const std::regex statIdExpression(
-		R"REGEX((?:^|\n)[ \t]*stat_id[ \t]*=[ \t]*(\d+)[ \t]*(?:\r?\n|$))REGEX",
-		std::regex_constants::icase);
-	std::smatch completeMatch;
-	std::smatch statMatch;
-	if (!std::regex_search(marker, completeMatch, complete)
-		|| !std::regex_search(marker, statMatch, statIdExpression) || statMatch.size() < 2) {
-		throw std::runtime_error("the melee-splash TOML marker is incomplete or missing stat_id");
-	}
-	const auto statId = ReadInteger(statMatch[1].str(), "the melee-splash TOML stat_id");
-	if (statId < 0 || statId > MaximumStatId) {
-		throw std::runtime_error("the melee-splash TOML stat_id is outside the supported range");
-	}
-	return statId;
-}
+struct Edit {
+	fs::path relative;
+	std::string before, after;
+};
 
-auto Install(const D2RL::PluginContext* context) -> std::int32_t {
-	if (context->pluginConfigPath == nullptr || context->pluginConfigPath[0] == L'\0') {
-		throw std::runtime_error("D2RLoader did not provide the plugin TOML path");
-	}
-	const fs::path loaderConfigPath(context->pluginConfigPath);
-	const auto configDirectory = loaderConfigPath.parent_path();
-	if (configDirectory.empty()) {
-		throw std::runtime_error("D2RLoader's plugin config directory could not be resolved");
-	}
-	const auto markerPath = configDirectory / L"d2rl-melee-splash.toml";
-	if (const auto statId = MarkerStatId(markerPath); statId.has_value()) {
-		context->LogInfo("Melee Splash: installation marker found; skipping mod-file edits.");
-		return *statId;
-	}
-
-	const auto modRoot = FindActiveModRoot(context);
-	if (modRoot.empty()) {
-		throw std::runtime_error("could not resolve the active mod directory");
-	}
-	FirstRunInstallLock installLock;
-	if (const auto statId = MarkerStatId(markerPath); statId.has_value()) {
-		context->LogInfo("Melee Splash: another plugin instance completed installation; skipping mod-file edits.");
-		return *statId;
-	}
-
-	const auto statCostRelative = fs::path(L"data/global/excel/itemstatcost.txt");
-	const auto propertiesRelative = fs::path(L"data/global/excel/properties.txt");
-	const auto suffixRelative = fs::path(L"data/global/excel/magicsuffix.txt");
-	const auto modifierStringsRelative = fs::path(L"data/local/lng/strings/item-modifiers.json");
-	const auto affixStringsRelative = fs::path(L"data/local/lng/strings/item-nameaffixes.json");
-	const auto cascBaseDirectory = configDirectory / L"d2rl-melee-splash" / L"base";
-	const auto [mergedStatCost, statId] = MergeItemStatCost(
-		ReadTextOrCascBase(modRoot / statCostRelative, cascBaseDirectory / L"itemstatcost.txt"));
-	const auto [mergedProperties, propertyId] = MergeProperties(
-		ReadTextOrCascBase(modRoot / propertiesRelative, cascBaseDirectory / L"properties.txt"));
-	const auto mergedSuffixes = MergeMagicSuffix(
-		ReadTextOrCascBase(modRoot / suffixRelative, cascBaseDirectory / L"magicsuffix.txt"));
-	const auto mergedModifierStrings = MergeLocalizedJson(
-		ReadTextOrCascBase(modRoot / modifierStringsRelative, cascBaseDirectory / L"item-modifiers.json"),
-		IDR_MELEESPLASH_ITEM_MODIFIER_STRING,
-		ModifierStringKey, ModifierString);
-	const auto mergedAffixStrings = MergeLocalizedJson(
-		ReadTextOrCascBase(modRoot / affixStringsRelative, cascBaseDirectory / L"item-nameaffixes.json"),
-		IDR_MELEESPLASH_AFFIX_NAME_STRING,
-		SuffixName, SuffixString);
-
-	std::map<fs::path, Bytes> desired;
-	desired.emplace(statCostRelative, StringToBytes(mergedStatCost));
-	desired.emplace(propertiesRelative, StringToBytes(mergedProperties));
-	desired.emplace(suffixRelative, StringToBytes(mergedSuffixes));
-	desired.emplace(modifierStringsRelative, StringToBytes(mergedModifierStrings));
-	desired.emplace(affixStringsRelative, StringToBytes(mergedAffixStrings));
-
-	const auto loaderDirectory = configDirectory.parent_path();
-	if (loaderDirectory.empty()) {
-		throw std::runtime_error("the mod's D2RLoader folder could not be resolved");
-	}
-	const auto backupRoot = loaderDirectory / L"backups/d2rl-melee-splash" / Timestamp();
-	std::error_code error;
-	fs::create_directories(backupRoot, error);
-	if (error) {
-		throw std::runtime_error("could not create a first-run backup directory");
-	}
-	std::vector<fs::path> createdFromBase;
-	for (const auto& [relative, bytes] : desired) {
-		(void)bytes;
-		const auto original = modRoot / relative;
-		const bool exists = fs::exists(original, error);
-		if (error) {
-			throw std::runtime_error("could not inspect an installation target before backup");
+void ApplyEdits(const ModPaths& paths, const std::vector<Edit>& edits,
+		std::optional<std::string_view> initialConfig) {
+	fs::path backupRoot;
+	if (!edits.empty()) {
+		backupRoot = fs::weakly_canonical(paths.loaderRoot / L"backups/d2rl-melee-splash" / Timestamp());
+		if (!IsWithin(paths.loaderRoot, backupRoot)) {
+			throw std::runtime_error("the backup path points outside the mod's loader folder");
 		}
-		if (!exists) {
-			createdFromBase.push_back(relative);
-			continue;
-		}
-		if (!fs::is_regular_file(original, error) || error) {
-			throw std::runtime_error("an installation target is not a regular file");
-		}
-		const auto backup = backupRoot / relative;
-		fs::create_directories(backup.parent_path(), error);
-		if (error || !fs::copy_file(original, backup, fs::copy_options::none, error) || error) {
-			throw std::runtime_error("a first-run backup file could not be created; mod files were not changed");
-		}
-	}
-	if (!createdFromBase.empty()) {
-		std::string manifest = "These target files were absent and were created from player-supplied CASC base files:\n";
-		for (const auto& relative : createdFromBase) {
-			manifest += relative.generic_string();
-			manifest += '\n';
-		}
-		WriteAtomic(backupRoot / L"created-from-casc-base.txt", StringToBytes(manifest));
-	}
-
-	std::size_t changedFiles = 0;
-	std::size_t createdFiles = 0;
-	for (const auto& [relative, bytes] : desired) {
-		const auto target = modRoot / relative;
-		std::error_code targetError;
-		const bool exists = fs::exists(target, targetError);
-		if (targetError) {
-			throw std::runtime_error("could not inspect an installation target before writing");
-		}
-		if (!exists || ReadFile(target) != bytes) {
-			if (!exists) {
-				++createdFiles;
+		for (const auto& edit : edits) {
+			const auto backup = backupRoot / edit.relative;
+			if (ReadModText(paths.dataRoot, edit.relative) != edit.before) {
+				throw std::runtime_error("a mod file changed during setup: " + PathText(paths.dataRoot / edit.relative));
 			}
-			WriteAtomic(target, bytes);
-			++changedFiles;
+			WriteAtomic(backup, edit.before, false);
+			if (ReadText(backup) != edit.before) {
+				throw std::runtime_error("could not verify " + PathText(backup));
+			}
 		}
 	}
 
-	std::string marker =
-		"[installation]\n"
-		"complete = true\n"
-		"plugin_version = \"0.3.7\"\n"
-		"stat_id = " + std::to_string(statId) + "\n"
-		"property_id = " + std::to_string(propertyId) + "\n"
-		"\n[melee_splash]\n"
+	std::size_t written = 0;
+	try {
+		for (const auto& edit : edits) {
+			if (ReadModText(paths.dataRoot, edit.relative) != edit.before) {
+				throw std::runtime_error("a mod file changed during setup: " + PathText(paths.dataRoot / edit.relative));
+			}
+			WriteAtomic(paths.dataRoot / edit.relative, edit.after);
+			++written;
+		}
+		if (initialConfig.has_value()) WriteAtomic(paths.configFile, *initialConfig, false);
+	} catch (...) {
+		bool restored = true;
+		while (written != 0) {
+			const auto& edit = edits[--written];
+			try {
+				if (ReadModText(paths.dataRoot, edit.relative) != edit.after) restored = false;
+				else WriteAtomic(paths.dataRoot / edit.relative, edit.before);
+			} catch (...) {
+				restored = false;
+			}
+		}
+		if (!restored) {
+			throw std::runtime_error("could not restore every edited file; original files are in " + PathText(backupRoot));
+		}
+		throw;
+	}
+}
+
+constexpr std::string_view DefaultConfig =
+		"[melee_splash]\n"
 		"# Modes: all = a listed skill replaces item meleesplash; additive = its value adds to item meleesplash.\n"
 		"# whitelist = only listed skills splash, using each listed value instead of item meleesplash.\n"
 		"# Use skill_mode = \"additive\" to combine item meleesplash with the configured skill values.\n"
@@ -884,6 +822,8 @@ auto Install(const D2RL::PluginContext* context) -> std::int32_t {
 		"# Default radius by weapon tier, in tiles. Exceptional and elite weapons share one value.\n"
 		"normal_weapon_radius_tiles = 4\n"
 		"exceptional_elite_weapon_radius_tiles = 5\n"
+		"# Detailed combat logs can slow down play. Enable only while troubleshooting.\n"
+		"diagnostic_logging = false\n"
 		"\n[melee_splash.skills]\n"
 		"# Keys accept names from the active Skills.txt skill column or numeric *Id. Names are case-insensitive.\n"
 		"# Names resolve against active mod data; numeric keys refer to literal IDs. Quote names with spaces.\n"
@@ -893,8 +833,7 @@ auto Install(const D2RL::PluginContext* context) -> std::int32_t {
 		"# With whitelist, only listed skills splash and use exactly these values.\n"
 		"# Whirlwind = 100\n"
 		"# Bash = 100\n"
-		"# Other examples: 151 = 100 or \"Left Hand Swing\" = 50\n";
-	const auto radiusSection =
+		"# Other examples: 151 = 100 or \"Left Hand Swing\" = 50\n"
 		"\n[melee_splash.skill_radius_tiles]\n"
 		"# Optional per-skill radius overrides, in tiles; these replace both weapon-tier defaults.\n"
 		"# Radius rows do not enable a skill or add it to the whitelist.\n"
@@ -902,14 +841,79 @@ auto Install(const D2RL::PluginContext* context) -> std::int32_t {
 		"# Whirlwind = 8\n"
 		"# Bash = 8\n"
 		"# Numeric skill IDs also work, for example 151 = 8\n";
-	marker.append(radiusSection);
-	WriteAtomic(markerPath, StringToBytes(marker));
-	char message[256]{};
-	std::snprintf(message, sizeof(message),
-		"Melee Splash: first-run install completed; %zu data files updated, %zu created from supplied CASC base files, backup created, stat_id=%d.",
-		changedFiles, createdFiles, statId);
-	context->LogInfo(message);
-	return statId;
+
+auto Install(const D2RL::PluginContext& context) -> FirstRunResult {
+	const auto paths = FindModPaths(&context);
+	FirstRunInstallLock installLock;
+	if (fs::is_regular_file(paths.dataRoot)) {
+		const auto message = "Melee Splash: unpack the mod before setup; its data package is a file: "
+			+ PathText(paths.dataRoot);
+		context.LogError(message.c_str());
+		return {};
+	}
+
+	bool haveAll = true;
+	for (const auto* relative : RequiredFiles) {
+		haveAll &= CheckRequiredFile(context, paths.dataRoot, relative);
+	}
+	if (!haveAll) return {};
+
+	enum Target : std::size_t { ItemStatCost, Properties, MagicSuffix, ModifierStrings, AffixStrings };
+	std::array<std::string, RequiredFiles.size()> original;
+	for (std::size_t i = 0; i < original.size(); ++i) {
+		original[i] = ReadModText(paths.dataRoot, RequiredFiles[i]);
+	}
+
+	auto stat = MergeItemStatCost(original[ItemStatCost]);
+	auto properties = MergeProperties(original[Properties]);
+	auto suffix = MergeMagicSuffix(original[MagicSuffix]);
+	const auto modifierKeys = LocalizationKeys(original[ModifierStrings]);
+	const auto affixKeys = LocalizationKeys(original[AffixStrings]);
+	RequireCustomStrings(stat.tooltipKeys, modifierKeys, ModifierStringKey,
+		paths.dataRoot / RequiredFiles[ModifierStrings]);
+	RequireCustomStrings(suffix.affixKeys, affixKeys, SuffixName,
+		paths.dataRoot / RequiredFiles[AffixStrings]);
+
+	const bool addModifier = stat.tooltipKeys.contains(std::string(ModifierStringKey))
+		&& !modifierKeys.contains(std::string(ModifierStringKey));
+	const bool addAffix = suffix.affixKeys.contains(std::string(SuffixName))
+		&& !affixKeys.contains(std::string(SuffixName));
+	auto usedIds = addModifier || addAffix ? ReadLocalizationIds(paths.dataRoot) : std::set<std::uint32_t>{};
+	auto modifiers = addModifier
+		? MergeLocalizedJson(original[ModifierStrings], IDR_MELEESPLASH_ITEM_MODIFIER_STRING, ModifierStringKey, usedIds)
+		: original[ModifierStrings];
+	auto affixes = addAffix
+		? MergeLocalizedJson(original[AffixStrings], IDR_MELEESPLASH_AFFIX_NAME_STRING, SuffixName, usedIds)
+		: original[AffixStrings];
+
+	// Compare the actual files, including previously staged and customized installs.
+	std::vector<Edit> edits;
+	const auto queue = [&](Target target, std::string text) {
+		if (original[target] != text) {
+			edits.push_back({RequiredFiles[target], std::move(original[target]), std::move(text)});
+		}
+	};
+	queue(ItemStatCost, std::move(stat.text));
+	queue(Properties, std::move(properties));
+	queue(MagicSuffix, std::move(suffix.text));
+	queue(ModifierStrings, std::move(modifiers));
+	queue(AffixStrings, std::move(affixes));
+
+	std::optional<std::string_view> initialConfig;
+	const auto configStatus = fs::symlink_status(paths.configFile);
+	if (configStatus.type() == fs::file_type::not_found) {
+		initialConfig = DefaultConfig;
+	} else if (!fs::is_regular_file(configStatus)) {
+		throw std::runtime_error("the plugin configuration is not a regular file: " + PathText(paths.configFile));
+	}
+	ApplyEdits(paths, edits, initialConfig);
+
+	if (!edits.empty()) {
+		context.LogInfo("Melee Splash: first-run install complete. Restart D2RLoader to load the splash data.");
+	} else {
+		context.LogInfo("Melee Splash: existing installation found; reusing its mod data.");
+	}
+	return {stat.id, !edits.empty()};
 }
 
 } // namespace
@@ -917,28 +921,28 @@ auto Install(const D2RL::PluginContext* context) -> std::int32_t {
 auto FindActiveModRootPath(const D2RL::PluginContext* context) noexcept
 		-> std::filesystem::path {
 	try {
-		return FindActiveModRoot(context);
+		return FindModPaths(context).dataRoot;
 	} catch (...) {
 		return {};
 	}
 }
 
-auto RunFirstRunInstall(const D2RL::PluginContext* context) noexcept -> std::int32_t {
+auto RunFirstRunInstall(const D2RL::PluginContext* context) noexcept -> FirstRunResult {
 	if (context == nullptr) {
-		return -1;
+		return {};
 	}
 	try {
-		return Install(context);
+		return Install(*context);
 	} catch (const std::exception& exception) {
 		char message[512]{};
 		std::snprintf(message, sizeof(message),
-			"Melee Splash: first-run installation failed (%s); no completion marker was created.",
+			"Melee Splash: first-run setup failed. %s",
 			exception.what());
 		context->LogError(message);
 	} catch (...) {
-		context->LogError("Melee Splash: first-run installation failed unexpectedly; no completion marker was created.");
+		context->LogError("Melee Splash: first-run setup failed unexpectedly.");
 	}
-	return -1;
+	return {};
 }
 
 } // namespace RuffnecKk::MeleeSplash

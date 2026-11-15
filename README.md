@@ -13,33 +13,66 @@ D2RLoader plugin that adds configurable melee splash damage to Diablo II: Resurr
 
 ## Install
 
-Requires D2RLoader with Plugin ABI 4 support. Put `d2rl-melee-splash.dll` in the active mod's `d2rloader/plugins` folder, then launch the game through D2RLoader. The active mod's data files must be writable for the one-time installer to run.
+These instructions apply to the current source. If you downloaded a
+published DLL, use the installation instructions for that version on the
+[Releases page](https://github.com/MadMike616/d2rl-melee-splash/releases).
 
-After the first-run install completes, exit and restart D2RLoader before testing the mod. The restart lets the game load the newly created or edited data files; launch the mod again after restarting.
+You need D2RLoader with Plugin ABI 4 support and an unpacked, writable mod.
+In the standard layout, the mod's loose data is under
+`mods/<ModName>/<ModName>.mpq/data/`, where `<ModName>.mpq` is a directory.
 
-On first load, the plugin backs up and merges only these five files:
+1. Keep the mod's existing loose copies of the five files below. Extract
+   any missing originals from your own game's CASC into the matching
+   directory under the mod's `<ModName>.mpq` folder. Blizzard's base data
+   is copyrighted and is not bundled with the DLL.
+2. With the game closed, copy `d2rl-melee-splash.dll` to
+   `mods/<ModName>/d2rloader/plugins/`. Start D2RLoader with that mod selected.
+3. Look for **first-run install complete** in
+   `mods/<ModName>/d2rloader/logs/d2rl-melee-splash.log`. Exit and restart
+   D2RLoader with the same mod so the game loads the changed files.
+   Splash becomes active on that next launch.
 
-- `data/global/excel/itemstatcost.txt`
-- `data/global/excel/properties.txt`
-- `data/global/excel/magicsuffix.txt`
-- `data/local/lng/strings/item-modifiers.json`
-- `data/local/lng/strings/item-nameaffixes.json`
-
-If a target file is absent from the active mod, the installer needs its base version to create a complete data file. Because the base files are copyrighted Blizzard game data, the release does not redistribute them. Extract the corresponding files from your own Diablo II: Resurrected CASC with a CASC extraction tool, then place them under the active mod's `d2rloader/config/d2rl-melee-splash/base/` folder using these filenames:
-
-| CASC path to extract | Filename in the `base` folder |
+| Directory inside `<ModName>.mpq` | Required files |
 | --- | --- |
-| `data/global/excel/itemstatcost.txt` | `itemstatcost.txt` |
-| `data/global/excel/properties.txt` | `properties.txt` |
-| `data/global/excel/magicsuffix.txt` | `magicsuffix.txt` |
-| `data/local/lng/strings/item-modifiers.json` | `item-modifiers.json` |
-| `data/local/lng/strings/item-nameaffixes.json` | `item-nameaffixes.json` |
+| `data/global/excel/` | `itemstatcost.txt`, `properties.txt`, `magicsuffix.txt` |
+| `data/local/lng/strings/` | `item-modifiers.json`, `item-nameaffixes.json` |
 
-For example, if your active mod is `MyMod`, put them in `mods/MyMod/d2rloader/config/d2rl-melee-splash/base/`. Only files missing from the active mod need a matching extracted base file; if all five target files already exist, no CASC extraction is needed. The installer reads these files and adds the splash rows when it creates missing targets. It does not modify the extracted copies. Do not redistribute the extracted base files. Existing mod files are backed up before editing; the backup folder includes `created-from-casc-base.txt` listing targets created from the supplied files.
+If any files are missing, setup stops before editing the mod. The plugin
+log lists every missing file and its full destination path. Supply those
+files and launch again. If you previously extracted files to the plugin's
+old `d2rloader/config/d2rl-melee-splash/base/` folder, copy any still-missing
+files into the matching loose data directories above.
 
-The installer selects an unused stat ID, preferring 398, and an unused property ID, preferring 314. It adds the stat/property rows, localized tooltip and suffix strings, and the charm suffix rows: small charms roll 1–3%, large charms 2–6%, and grand charms 3–9%. It does not edit unique, set, or other item assignment tables; assign the property to other items in your mod's item data files if desired.
+The DLL contains the rows and translations it merges. It prefers stat ID
+398 and property ID 314 and selects unused IDs when those are taken. It
+checks the mod's loose localization files before assigning string IDs.
+The charm suffixes roll 1–3% on small charms, 2–6% on large charms, and
+3–9% on grand charms. Mod authors can assign `meleesplash` to other
+items in their own item tables.
 
-Backups are stored under `d2rloader/backups/d2rl-melee-splash/`. The marker `d2rloader/config/d2rl-melee-splash.toml` records the selected IDs and prevents repeat edits. Deleting the marker reruns the installer; it does not restore the backups. To uninstall, remove the DLL, restore the five files from a backup, and remove the marker.
+The installer backs up each file it changes under
+`mods/<ModName>/d2rloader/backups/d2rl-melee-splash/<timestamp>/` before
+writing. If a write fails, it attempts to restore changes made in that
+run. It shares an install lock with The Unruned Oath and Quest Reward Reset
+1.0.24 or later.
+
+To upgrade, close the game, replace the DLL, and start D2RLoader with the
+same mod. The plugin recognizes existing or manually staged splash data
+and keeps its IDs, custom rows, strings, and TOML settings. A restart is
+only required if the installer reports that it changed the mod files.
+The old `[installation]` TOML section is optional; the mod data itself
+determines whether installation is needed. On each data table load the
+DLL verifies `item_melee_splash` by name in the compiled tables for
+Classic, LoD, and Reign of the Warlock. If it cannot verify the stat for
+the character's game mode, item splash is disabled for that mode.
+Fixed skill values can still apply.
+
+To uninstall the data, first remove splash items from characters and
+stashes that will continue to use the mod. With the game closed, remove
+the DLL and restore the affected files from the install backup, merging
+any later mod edits you want to keep. Older backups may include a
+`created-from-casc-base.txt` list of files created by the old installer;
+remove those files or merge any later changes you want to keep.
 
 ## Skill-specific splash settings
 
@@ -74,15 +107,18 @@ The plugin reads these settings when it loads. Restart D2RLoader after editing t
 
 The first-run TOML uses `skill_mode = "all"` by default. It includes commented Whirlwind and Bash examples under `[melee_splash.skills]` for trying any of the three modes, plus commented 8-tile per-skill radius examples.
 
-The first-run installer shares a mutex with Quest Reward Reset 1.0.24 and later, so those two plugins serialize their initial edits and backups when they start together.
-
 ## Diagnostics
 
-The `melee-splash` status command reports counters and hook state. Loader logs report damage-packet capture, conversion type, and secondary-hit results. The plugin checks expected native code before installing hooks and skips unsupported executable layouts.
+The `melee-splash` status command reports counters, hook state, and
+verified stat IDs. Startup messages and warnings are always logged.
+Detailed combat logging is off by default because writing a message
+for each hit and target can cause hitches. To collect a short combat
+trace for troubleshooting, set `diagnostic_logging = true` under
+`[melee_splash]` and restart D2RLoader. Set it back to `false` when done.
 
 ## Build
 
-Use D2RLoader PluginSDK 0.4.0 / Plugin ABI 4, Windows x64, and an x64 Visual Studio Developer Command Prompt. Run `build-plugin.cmd <path-to-PluginSDK-SDK-0.4.0>` from the repository; it builds with MSVC Release optimization (`/O2 /Ob2 /DNDEBUG`), the static release runtime (`/MT`), and linker optimizations, without debug information. Build output goes under the system temporary directory. The SDK is available from the [official PluginSDK repository](https://github.com/D2RLoader/PluginSDK).
+Use D2RLoader PluginSDK 0.4.0 / Plugin ABI 4, Windows x64, and an x64 Visual Studio Developer Command Prompt. Run `build-plugin.cmd <path-to-PluginSDK-SDK-0.4.0>` from the repository; it builds with MSVC Release optimization (`/O2 /Ob2 /DNDEBUG`), the static release runtime (`/MT`), and linker optimizations, without debug information. Pass an optional output directory after the SDK path; otherwise build output goes under the system temporary directory. The SDK is available from the [official PluginSDK repository](https://github.com/D2RLoader/PluginSDK).
 
 ## Third-party source
 

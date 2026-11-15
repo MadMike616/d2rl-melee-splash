@@ -4,6 +4,8 @@
 
 The expected-byte signatures for the player skill input routines and the active-skill layout witness were verified against the `cast-triggers` source in the RuffDood D2RLoader Suite. The project is available at <https://github.com/RuffDood/RuffnecKk-D2RLoader-Suite>.
 
+The read-only runtime stat lookup uses native layout and byte witnesses from the suite’s ISC12 sources and DataTables atlas.
+
 MIT License
 
 Copyright (c) 2026 RuffnecKk and contributors
@@ -25,4 +27,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-

@@ -2,14 +2,15 @@
 setlocal
 
 if "%~1"=="" (
-    echo Usage: build-plugin.cmd ^<path-to-PluginSDK-SDK-0.4.0^>
+    echo Usage: build-plugin.cmd ^<path-to-PluginSDK-SDK-0.4.0^> [output-directory]
     exit /b 2
 )
 
 set "ROOT=%~dp0"
 set "SRC=%ROOT%src"
 set "SDK_INCLUDE=%~1\include"
-set "OUT=%TEMP%\d2rl-melee-splash-build-0.3.7"
+set "OUT=%TEMP%\d2rl-melee-splash-build-1.3.9"
+if not "%~2"=="" set "OUT=%~f2"
 
 if not exist "%SDK_INCLUDE%\D2RLPlugin\api.h" (
     echo Could not find D2RLoader SDK headers under "%SDK_INCLUDE%".
@@ -25,6 +26,9 @@ if errorlevel 1 exit /b %errorlevel%
 cl.exe /nologo /std:c++20 /O2 /Ob2 /DNDEBUG /MT /W4 /permissive- /EHsc /utf-8 /DWIN32_LEAN_AND_MEAN /DNOMINMAX /DUNICODE /D_UNICODE /I"%SDK_INCLUDE%" /I"%SRC%" /c "%SRC%\installer.cpp" /Fo"%OUT%\installer.obj"
 if errorlevel 1 exit /b %errorlevel%
 
+cl.exe /nologo /std:c++20 /O2 /Ob2 /DNDEBUG /MT /W4 /permissive- /EHsc /utf-8 /DWIN32_LEAN_AND_MEAN /DNOMINMAX /DUNICODE /D_UNICODE /I"%SDK_INCLUDE%" /I"%SRC%" /c "%SRC%\stat_lookup.cpp" /Fo"%OUT%\stat_lookup.obj"
+if errorlevel 1 exit /b %errorlevel%
+
 ml64.exe /nologo /c /Fo"%OUT%\pre_conversion.obj" "%SRC%\pre_conversion.asm"
 if errorlevel 1 exit /b %errorlevel%
 
@@ -36,7 +40,7 @@ if errorlevel 1 (
 )
 popd
 
-link.exe /nologo /DLL /INCREMENTAL:NO /OPT:REF /OPT:ICF /Brepro /MACHINE:X64 /OUT:"%OUT%\d2rl-melee-splash.dll" "%OUT%\plugin.obj" "%OUT%\installer.obj" "%OUT%\pre_conversion.obj" "%OUT%\plugin.res"
+link.exe /nologo /DLL /INCREMENTAL:NO /OPT:REF /OPT:ICF /Brepro /MACHINE:X64 /OUT:"%OUT%\d2rl-melee-splash.dll" "%OUT%\plugin.obj" "%OUT%\installer.obj" "%OUT%\stat_lookup.obj" "%OUT%\pre_conversion.obj" "%OUT%\plugin.res"
 if errorlevel 1 exit /b %errorlevel%
 
 echo Built: %OUT%\d2rl-melee-splash.dll
