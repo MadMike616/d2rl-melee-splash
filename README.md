@@ -22,10 +22,12 @@ Melee Splash v1.3.9 was tested with D2R 3.4.95032 and D2RLoader 1.3.1-beta.
 In the standard layout, the mod's loose data is under
 `mods/<ModName>/<ModName>.mpq/data/`, where `<ModName>.mpq` is a directory.
 
-1. Keep the mod's existing loose copies of the five files below. Extract
-   any missing originals from your own game's CASC into the matching
-   directory under the mod's `<ModName>.mpq` folder. Blizzard's base data
-   is copyrighted and is not bundled with the DLL.
+1. Keep the mod's existing loose copies of the five files below. For
+   any missing files, use Ladik's Casc Viewer to extract the originals
+   from your own game's CASC. Place them in the shared folder
+   `mods/<ModName>/d2rloader/plugins/basefiles-and-backups/basefiles/`.
+   Keep the paths below relative to the extracted `data/` directory.
+   Blizzard's base data is copyrighted and is not bundled with the DLL.
 2. With the game closed, copy `d2rl-melee-splash.dll` to
    `mods/<ModName>/d2rloader/plugins/`. Start D2RLoader with that mod selected.
 3. Look for **first-run install complete** in
@@ -33,16 +35,19 @@ In the standard layout, the mod's loose data is under
    D2RLoader with the same mod so the game loads the changed files.
    Splash becomes active on that next launch.
 
-| Directory inside `<ModName>.mpq` | Required files |
+| Folder under `basefiles/` | Required files |
 | --- | --- |
-| `data/global/excel/` | `itemstatcost.txt`, `properties.txt`, `magicsuffix.txt` |
-| `data/local/lng/strings/` | `item-modifiers.json`, `item-nameaffixes.json` |
+| `global/excel/` | `itemstatcost.txt`, `properties.txt`, `magicsuffix.txt` |
+| `local/lng/strings/` | `item-modifiers.json`, `item-nameaffixes.json` |
 
-If any files are missing, setup stops before editing the mod. The plugin
-log lists every missing file and its full destination path. Supply those
-files and launch again. If you previously extracted files to the plugin's
-old `d2rloader/config/d2rl-melee-splash/base/` folder, copy any still-missing
-files into the matching loose data directories above.
+For example, `data/global/excel/itemstatcost.txt` from CASC goes in
+`basefiles/global/excel/itemstatcost.txt`. The installer prefers the
+mod's loose copy of each file and uses the shared copy only to create a
+missing file. It leaves the shared originals untouched. If a required
+file is missing in both places, setup reports both paths and stops
+before editing the mod. If you have files in the old
+`d2rloader/config/d2rl-melee-splash/base/` folder, copy any still needed
+into the matching folders under the new `basefiles/` directory.
 
 The DLL contains the rows and translations it merges. It prefers stat ID
 398 and property ID 314 and selects unused IDs when those are taken. It
@@ -51,11 +56,12 @@ The charm suffixes roll 1–3% on small charms, 2–6% on large charms, and
 3–9% on grand charms. Mod authors can assign `meleesplash` to other
 items in their own item tables.
 
-The installer backs up each file it changes under
-`mods/<ModName>/d2rloader/backups/d2rl-melee-splash/<timestamp>/` before
-writing. If a write fails, it attempts to restore changes made in that
-run. It shares an install lock with The Unruned Oath and Quest Reward Reset
-1.0.24 or later.
+The installer backs up each existing file it changes under
+`mods/<ModName>/d2rloader/plugins/basefiles-and-backups/backups/d2rl-melee-splash/<timestamp>/`
+before writing. A `created-files.txt` in that backup lists any new files.
+If a write fails, setup restores prior edits and removes any files created
+during that attempt. It shares an install lock with The Unruned Oath and
+Quest Reward Reset 1.0.24 or later.
 
 To upgrade, close the game, replace the DLL, and start D2RLoader with the
 same mod. The plugin recognizes existing or manually staged splash data
@@ -71,9 +77,10 @@ Fixed skill values can still apply.
 To uninstall the data, first remove splash items from characters and
 stashes that will continue to use the mod. With the game closed, remove
 the DLL and restore the affected files from the install backup, merging
-any later mod edits you want to keep. Older backups may include a
-`created-from-casc-base.txt` list of files created by the old installer;
-remove those files or merge any later changes you want to keep.
+any later mod edits you want to keep. Remove files listed in
+`created-files.txt` if present. Backups from older installations remain
+under `d2rloader/backups/d2rl-melee-splash/`; some contain a
+`created-from-casc-base.txt` list instead.
 
 ## Skill-specific splash settings
 
@@ -111,11 +118,8 @@ The first-run TOML uses `skill_mode = "all"` by default. It includes commented W
 ## Diagnostics
 
 The `melee-splash` status command reports counters, hook state, and
-verified stat IDs. Startup messages and warnings are always logged.
-Detailed combat logging is off by default because writing a message
-for each hit and target can cause hitches. To collect a short combat
-trace for troubleshooting, set `diagnostic_logging = true` under
-`[melee_splash]` and restart D2RLoader. Set it back to `false` when done.
+verified stat IDs. The plugin log records setup results, startup status,
+and compatibility warnings.
 
 ## Build
 

@@ -13,7 +13,6 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <cstdarg>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -105,8 +104,6 @@ constexpr std::uintptr_t ExecuteEventsRva = 0x44CE80;
 constexpr std::uintptr_t EventFunc7Rva = 0x583E00;
 constexpr std::uintptr_t EventFunc9Rva = 0x583400;
 constexpr std::uintptr_t EventFunc14Rva = 0x583580;
-constexpr std::uintptr_t EventFunc15Rva = 0x584170;
-constexpr std::uintptr_t EventFunc16Rva = 0x583150;
 constexpr std::uintptr_t EventFunc19Rva = 0x5849D0;
 constexpr std::uintptr_t EventFunc20Rva = 0x583B30;
 constexpr std::uintptr_t EventFunc21Rva = 0x5837F0;
@@ -203,15 +200,6 @@ constexpr auto Event14Expected = std::to_array<std::uint8_t>({
     0x40,0x55,0x53,0x56,0x57,0x41,0x54,0x41,0x56,0x41,0x57,0x48,0x8D,0xAC,0x24,
     0x40,0xFF,0xFF,0xFF,0x48,0x81,0xEC,0xC0,0x01,0x00,0x00,0x48,0x8B,0x05,0x27,
     0x7D,0x44,0x02,
-});
-constexpr auto Event15Expected = std::to_array<std::uint8_t>({
-    0x48,0x89,0x5C,0x24,0x08,0x48,0x89,0x6C,0x24,0x10,0x48,0x89,0x74,0x24,0x18,
-    0x57,0x48,0x83,0xEC,0x50,0x49,0x8B,0xF9,0x49,
-});
-constexpr auto Event16Expected = std::to_array<std::uint8_t>({
-    0x48,0x89,0x6C,0x24,0x10,0x48,0x89,0x74,0x24,0x18,0x57,0x41,0x56,0x41,0x57,
-    0x48,0x83,0xEC,0x60,0x49,0x8B,0xF1,0x49,0x8B,0xF8,0x44,0x8B,0xFA,0x4C,0x8B,
-    0xF1,
 });
 constexpr auto Event19Expected = std::to_array<std::uint8_t>({
     0x48,0x89,0x5C,0x24,0x08,0x48,0x89,0x6C,0x24,0x10,0x48,0x89,0x74,0x24,0x18,
@@ -317,8 +305,6 @@ ExecuteEventsFn OriginalExecute{};
 EventFunctionFn OriginalEvent7{};
 EventFunctionFn OriginalEvent9{};
 EventFunctionFn OriginalEvent14{};
-EventFunctionFn OriginalEvent15{};
-EventFunctionFn OriginalEvent16{};
 EventFunctionFn OriginalEvent19{};
 EventFunctionFn OriginalEvent20{};
 EventFunctionFn OriginalEvent21{};
@@ -350,20 +336,14 @@ GetPathCoordinateFn GetPathY{};
 
 std::atomic<bool> Operational{};
 std::atomic<bool> AnyMutationInstalled{};
-std::atomic<std::uint64_t> Sequence{};
 std::atomic<std::uint64_t> Captures{};
 std::atomic<std::uint64_t> Bursts{};
 std::atomic<std::uint64_t> SecondaryHits{};
 std::atomic<std::uint64_t> RejectedHits{};
 std::atomic<std::uint64_t> RejectedTargets{};
 std::atomic<std::uint64_t> DroppedSidecars{};
-std::atomic<std::uint32_t> FillDiagnosticLines{};
-std::atomic<std::uint32_t> SkillPolicyDiagnosticLines{};
-std::atomic<std::uint32_t> SkillInputDiagnosticLines{};
 std::atomic<const BKVCombatInterop::ApiV1*> BKVCombatApi{};
 std::atomic<bool> BKVCombatIncompatibleLogged{};
-
-constexpr std::uint32_t MaximumFillDiagnosticLines = 64;
 
 struct RecentSkillInput {
     void* game{};
@@ -418,27 +398,6 @@ bool IsSupportedMeleeFillReturn(std::uintptr_t returnRva) noexcept {
         || returnRva == QueuedMeleeFillReturnRva;
 }
 
-void DiagnosticLog(const char* format, ...) noexcept {
-    if (!ActiveConfig.diagnosticLogging || !Context) return;
-    char message[1024]{};
-    va_list arguments;
-    va_start(arguments, format);
-    std::vsnprintf(message, sizeof(message), format, arguments);
-    va_end(arguments);
-    Context->LogInfo(message);
-}
-
-const char* CriticalOutcomeName(
-        Native92777CriticalOutcome outcome) noexcept {
-    switch (outcome) {
-    case Native92777CriticalOutcome::WeaponMastery: return "weaponMastery";
-    case Native92777CriticalOutcome::PassiveCritical: return "critical";
-    case Native92777CriticalOutcome::DeadlyStrike: return "deadly";
-    case Native92777CriticalOutcome::None: return "none";
-    }
-    return "none";
-}
-
 class OwnedDamage final {
 public:
     OwnedDamage() = default;
@@ -487,15 +446,10 @@ struct CaptureMetadata {
     UnitIdentity primary{};
     std::int32_t skillId{};
     std::int32_t damageMode{};
-    std::uint32_t weaponClassId{UINT32_MAX};
-    std::int32_t baseRadiusTiles{};
-    std::int32_t radiusBonusTiles{};
     std::int32_t radiusTiles{};
     std::int32_t splashPercent{};
-    bool exceptionalOrEliteWeapon{};
     bool gateRequired{};
     bool gateSatisfied{};
-    bool primaryCriticalDeadly{};
 };
 
 struct FillFrame {
@@ -508,7 +462,6 @@ struct FillFrame {
     bool preCriticalSeen{};
     bool event3Seen{};
     bool gateSeen{};
-    bool primaryCriticalDeadly{};
     bool preConversionSeen{};
     bool weaponSourceOnly{};
     bool sourceCaptureValid{true};
@@ -528,7 +481,6 @@ struct PendingCapture {
     void* gameToken{};
     const void* sourceDamage{};
     std::uint32_t threadId{};
-    std::uint64_t sequence{};
     CaptureMetadata metadata{};
     std::unique_ptr<OwnedDamage> damage;
 };
@@ -537,7 +489,6 @@ struct CombatSidecar {
     void* gameToken{};
     void* node{};
     std::uint32_t threadId{};
-    std::uint64_t sequence{};
     CaptureMetadata metadata{};
     std::unique_ptr<OwnedDamage> damage;
 };
@@ -552,13 +503,6 @@ struct PrimaryFrame {
     bool primaryHitSucceeded{};
 };
 
-struct SecondaryDiagnostics {
-    std::uint32_t openWoundsCalls{};
-    std::uint32_t crushingBlowCalls{};
-    std::int32_t lastOpenWoundsResult{};
-    std::int32_t lastCrushingBlowResult{};
-};
-
 struct CollectionContext {
     UnitIdentity attacker{};
     UnitIdentity primary{};
@@ -571,7 +515,6 @@ std::vector<std::unique_ptr<CombatSidecar>> Sidecars;
 
 thread_local FillFrame* ActiveFillFrame{};
 thread_local PrimaryFrame* ActivePrimaryFrame{};
-thread_local SecondaryDiagnostics* ActiveSecondaryDiagnostics{};
 thread_local std::vector<PendingCapture> PendingCaptures;
 thread_local std::uint32_t SecondaryDepth{};
 
@@ -608,23 +551,6 @@ public:
     ~SecondaryScope() noexcept { --SecondaryDepth; }
     SecondaryScope(const SecondaryScope&) = delete;
     auto operator=(const SecondaryScope&) -> SecondaryScope& = delete;
-};
-
-class SecondaryDiagnosticsScope final {
-public:
-    explicit SecondaryDiagnosticsScope(
-            SecondaryDiagnostics* diagnostics) noexcept
-        : previous_(ActiveSecondaryDiagnostics) {
-        ActiveSecondaryDiagnostics = diagnostics;
-    }
-    ~SecondaryDiagnosticsScope() noexcept {
-        ActiveSecondaryDiagnostics = previous_;
-    }
-    SecondaryDiagnosticsScope(const SecondaryDiagnosticsScope&) = delete;
-    auto operator=(const SecondaryDiagnosticsScope&)
-        -> SecondaryDiagnosticsScope& = delete;
-private:
-    SecondaryDiagnostics* previous_{};
 };
 
 auto SkillIdFromActualHit(void* attacker) noexcept -> std::int32_t {
@@ -669,17 +595,8 @@ void RememberSkillInput(
             .observedAtMs = now,
             .hasTarget = hasTarget,
         });
-        if (SkillInputDiagnosticLines.fetch_add(
-                    1, std::memory_order_relaxed) < MaximumFillDiagnosticLines) {
-            DiagnosticLog(
-                "MeleeSplash skill input skill=%d target=%s%d/%u.",
-                skillId < 0 ? NormalAttackSkillId : skillId,
-                hasTarget ? "unit:" : "position:",
-                hasTarget ? target.type : 0,
-                hasTarget ? target.guid : 0);
-        }
     } catch (...) {
-        DiagnosticLog("MeleeSplash skill input context could not be stored.");
+        // Native skill lookup remains available if the input cannot be recorded.
     }
 }
 
@@ -706,22 +623,17 @@ auto RecentSkillIdForHit(
     return std::nullopt;
 }
 
-struct SkillIdResolution {
-    std::int32_t id{};
-    const char* source{};
-};
-
 auto ResolveSkillIdFromActualHit(
-        void* game, void* attacker, void* primary) noexcept -> SkillIdResolution {
+        void* game, void* attacker, void* primary) noexcept -> std::int32_t {
     const auto nativeSkillId = SkillIdFromActualHit(attacker);
     if (nativeSkillId != NormalAttackSkillId) {
-        return {.id = nativeSkillId, .source = "native"};
+        return nativeSkillId;
     }
     if (const auto inputSkillId = RecentSkillIdForHit(
             game, Identity(attacker), Identity(primary))) {
-        return {.id = *inputSkillId, .source = "input"};
+        return *inputSkillId;
     }
-    return {.id = nativeSkillId, .source = "native"};
+    return nativeSkillId;
 }
 
 auto IsExceptionalOrEliteWeapon(void* weapon) noexcept -> bool {
@@ -745,21 +657,8 @@ auto BuildMetadata(
             || Identity(primary).type != UnitMonster) {
         return {};
     }
-    const auto skillResolution = ResolveSkillIdFromActualHit(
-        game, attacker, primary);
-    const auto skillId = skillResolution.id;
-    const auto skillEnabled = IsSkillEnabled(ActiveConfig, skillId);
-    const auto logSkillPolicy = SkillPolicyDiagnosticLines.fetch_add(
-        1, std::memory_order_relaxed) < MaximumFillDiagnosticLines;
-    if (logSkillPolicy) {
-        DiagnosticLog(
-            "MeleeSplash skill policy skill=%d source=%s enabled=%s mode=%s.",
-            skillId,
-            skillResolution.source,
-            skillEnabled ? "true" : "false",
-            ActivationModeName(ActiveConfig.activationMode));
-    }
-    if (!skillEnabled) return {};
+    const auto skillId = ResolveSkillIdFromActualHit(game, attacker, primary);
+    if (!IsSkillEnabled(ActiveConfig, skillId)) return {};
 
     auto metadata = std::make_unique<CaptureMetadata>();
     metadata->attacker = Identity(attacker);
@@ -767,11 +666,7 @@ auto BuildMetadata(
     metadata->skillId = skillId;
     metadata->damageMode = damageMode;
     auto* weapon = ResolveActiveWeapon ? ResolveActiveWeapon(attacker) : nullptr;
-    if (weapon) {
-        metadata->weaponClassId = Read<std::uint32_t>(
-            weapon, UnitClassIdOffset);
-    }
-    metadata->exceptionalOrEliteWeapon = IsExceptionalOrEliteWeapon(weapon);
+    const auto exceptionalOrEliteWeapon = IsExceptionalOrEliteWeapon(weapon);
     metadata->gateRequired = RequiresGateStat(ActiveConfig, skillId);
     metadata->gateSatisfied = !metadata->gateRequired;
     if (metadata->gateRequired && ActiveConfig.gateStatId >= 0) {
@@ -784,19 +679,10 @@ auto BuildMetadata(
         : 0;
     const auto splashStatId = MeleeSplashStatIdForUnit(attacker);
     const auto damagePercent = splashStatId >= 0 ? GetUnitStat(attacker, splashStatId, 0) : 0;
-    metadata->baseRadiusTiles = metadata->exceptionalOrEliteWeapon
-        ? ActiveConfig.baseRadiusExceptionalEliteWeapon
-        : ActiveConfig.baseRadiusNormalWeapon;
-    if (const auto* override = FindSkillOverride(ActiveConfig, skillId);
-            override && override->baseRadiusTiles.has_value()) {
-        metadata->baseRadiusTiles = *override->baseRadiusTiles;
-    }
-    metadata->radiusBonusTiles = std::max(radiusPercent, 0)
-        / std::max(ActiveConfig.radiusPercentPerTile, 1);
     metadata->radiusTiles = ClampNativeRadius(ResolveRadiusTiles(
         ActiveConfig,
         skillId,
-        metadata->exceptionalOrEliteWeapon,
+        exceptionalOrEliteWeapon,
         radiusPercent));
     metadata->splashPercent = ResolveSplashDamagePercent(
         ActiveConfig, skillId, damagePercent);
@@ -806,20 +692,8 @@ auto BuildMetadata(
         });
     if (ActiveConfig.requireCharmTier && !charmTier) return {};
     if (charmTier) {
-        metadata->baseRadiusTiles = charmTier->radiusTiles;
-        metadata->radiusBonusTiles = 0;
         metadata->radiusTiles = charmTier->radiusTiles;
         metadata->splashPercent = charmTier->damagePercent;
-    }
-    if (logSkillPolicy) {
-        DiagnosticLog(
-            "MeleeSplash skill settings skill=%d radius=%d splashPercent=%d "
-            "gateRequired=%s gateSatisfied=%s.",
-            skillId,
-            metadata->radiusTiles,
-            metadata->splashPercent,
-            metadata->gateRequired ? "true" : "false",
-            metadata->gateSatisfied ? "true" : "false");
     }
     if (metadata->radiusTiles <= 0 || metadata->splashPercent <= 0) return {};
     return metadata;
@@ -827,26 +701,15 @@ auto BuildMetadata(
 
 bool CaptureNormalizedPacket(FillFrame& frame, void* damage) {
     if (!frame.candidate) {
-        DiagnosticLog("MeleeSplash capture reject reason=frame-not-candidate.");
         return false;
     }
     if (frame.normalizedDamage) {
-        DiagnosticLog("MeleeSplash capture skip reason=already-normalized.");
         return true;
     }
     if (!frame.preCriticalSeen) {
-        DiagnosticLog(
-            "MeleeSplash capture reject reason=precritical-call-not-observed "
-            "event3=%s.",
-            frame.event3Seen ? "true" : "false");
         return false;
     }
     if (frame.damage != damage || !damage) {
-        DiagnosticLog(
-            "MeleeSplash capture reject reason=damage-identity-mismatch "
-            "expected=%p actual=%p.",
-            frame.damage,
-            damage);
         return false;
     }
     const auto conversionType = Read<std::uint8_t>(
@@ -855,16 +718,9 @@ bool CaptureNormalizedPacket(FillFrame& frame, void* damage) {
             || !(frame.event3Seen || frame.preConversionSeen)
             || !SupportsConversion(conversionType, Read<std::int32_t>(
                 damage, DamageConversionPercentOffset)))) {
-        DiagnosticLog(
-            "MeleeSplash capture reject reason=damage-conversion type=%u.",
-            static_cast<unsigned>(conversionType));
         return false;
     }
     if ((frame.preCriticalFlags & CriticalDeadlyResultFlag) != 0) {
-        DiagnosticLog(
-            "MeleeSplash capture reject reason=precritical-flag-already-set "
-            "flags=0x%04X.",
-            static_cast<unsigned>(frame.preCriticalFlags));
         return false;
     }
     const auto lateFlags = Read<std::uint16_t>(
@@ -872,25 +728,15 @@ bool CaptureNormalizedPacket(FillFrame& frame, void* damage) {
     const auto allowedLateFlags = static_cast<std::uint16_t>(
         frame.preCriticalFlags | CriticalDeadlyResultFlag);
     if (lateFlags != frame.preCriticalFlags && lateFlags != allowedLateFlags) {
-        DiagnosticLog(
-            "MeleeSplash capture reject reason=unexpected-late-flags "
-            "pre=0x%04X late=0x%04X allowed=0x%04X.",
-            static_cast<unsigned>(frame.preCriticalFlags),
-            static_cast<unsigned>(lateFlags),
-            static_cast<unsigned>(allowedLateFlags));
         return false;
     }
-    frame.primaryCriticalDeadly =
-        (lateFlags & CriticalDeadlyResultFlag) != 0;
     auto copy = OwnedDamage::Copy(damage);
     if (!copy) {
-        DiagnosticLog("MeleeSplash capture reject reason=damage-copy-failed.");
         return false;
     }
     Write(copy->Get(), DamagePhysicalOffset, frame.preCriticalPhysical);
     Write(copy->Get(), DamageResultFlagsOffset, frame.preCriticalFlags);
     if (frame.weaponSourceOnly && !MaterializeWeaponSource(frame, copy->Get())) {
-        DiagnosticLog("MeleeSplash capture reject reason=unqualified-source-packet.");
         return false;
     }
     frame.normalizedDamage = std::move(copy);
@@ -901,7 +747,6 @@ void PushPendingCapture(
         FillFrame& frame, std::unique_ptr<CaptureMetadata> metadata) {
     if (!frame.normalizedDamage || !metadata) return;
     metadata->gateSatisfied = metadata->gateSatisfied || frame.gateSeen;
-    metadata->primaryCriticalDeadly = frame.primaryCriticalDeadly;
     std::erase_if(PendingCaptures, [&frame](const auto& pending) {
         return pending.gameToken != frame.game;
     });
@@ -909,44 +754,14 @@ void PushPendingCapture(
         PendingCaptures.erase(PendingCaptures.begin());
         DroppedSidecars.fetch_add(1, std::memory_order_relaxed);
     }
-    const auto sequence = Sequence.fetch_add(1, std::memory_order_relaxed) + 1;
-    const auto* packet = frame.normalizedDamage->Get();
     PendingCaptures.push_back({
         .gameToken = frame.game,
         .sourceDamage = frame.damage,
         .threadId = GetCurrentThreadId(),
-        .sequence = sequence,
         .metadata = *metadata,
         .damage = std::move(frame.normalizedDamage),
     });
     Captures.fetch_add(1, std::memory_order_relaxed);
-    DiagnosticLog(
-        "MeleeSplash capture seq=%llu attacker=%d/%u primary=%d/%u skill=%d mode=%d "
-        "weaponClass=%u tier=%s baseRadius=%d radiusBonus=%d radiusFinal=%d "
-        "splashPercent=%d sharedPhys=%d sharedFire=%d sharedBurn=%d "
-        "sharedLightning=%d sharedMagic=%d sharedCold=%d sharedPoison=%d "
-        "primaryCrit=%s.",
-        static_cast<unsigned long long>(sequence),
-        metadata->attacker.type,
-        metadata->attacker.guid,
-        metadata->primary.type,
-        metadata->primary.guid,
-        metadata->skillId,
-        metadata->damageMode,
-        metadata->weaponClassId,
-        metadata->exceptionalOrEliteWeapon ? "exceptionalOrElite" : "normal",
-        metadata->baseRadiusTiles,
-        metadata->radiusBonusTiles,
-        metadata->radiusTiles,
-        metadata->splashPercent,
-        Read<std::int32_t>(packet, DamagePhysicalOffset),
-        Read<std::int32_t>(packet, DamageFireOffset),
-        Read<std::int32_t>(packet, DamageBurnOffset),
-        Read<std::int32_t>(packet, DamageLightningOffset),
-        Read<std::int32_t>(packet, DamageMagicOffset),
-        Read<std::int32_t>(packet, DamageColdOffset),
-        Read<std::int32_t>(packet, DamagePoisonOffset),
-        metadata->primaryCriticalDeadly ? "yes" : "no");
 }
 
 auto TakePendingCapture(
@@ -1008,7 +823,6 @@ void StoreSidecar(
     sidecar->gameToken = pending->gameToken;
     sidecar->node = node;
     sidecar->threadId = pending->threadId;
-    sidecar->sequence = pending->sequence;
     sidecar->metadata = pending->metadata;
     sidecar->damage = std::move(pending->damage);
     std::scoped_lock lock(SidecarMutex);
@@ -1244,11 +1058,6 @@ auto RollCriticalForTarget(
     return Native92777CriticalOutcome::None;
 }
 
-struct CriticalResolution {
-    const char* outcome{"none"};
-    const char* resolver{"native92777"};
-};
-
 auto ResolveBKVCombatApi() noexcept -> const BKVCombatInterop::ApiV1* {
     if (const auto* cached = BKVCombatApi.load(std::memory_order_acquire)) {
         return cached;
@@ -1260,28 +1069,21 @@ auto ResolveBKVCombatApi() noexcept -> const BKVCombatInterop::ApiV1* {
         GetProcAddress(module, BKVCombatInterop::GetApiExportName));
     const auto* api = getApi ? getApi(BKVCombatInterop::ApiVersion) : nullptr;
     if (!BKVCombatInterop::IsCompatibleApiV1(api)) {
-        if (!BKVCombatIncompatibleLogged.exchange(
-                true, std::memory_order_relaxed)) {
-            DiagnosticLog(
-                "MeleeSplash: Reimagined Combat API unavailable or incompatible; "
-                "using the exact native 92777 Critical/Deadly resolver.");
+        if (Context && !BKVCombatIncompatibleLogged.exchange(true, std::memory_order_relaxed)) {
+            Context->LogWarn("Melee Splash: Reimagined Combat API is incompatible; using the game's Critical/Deadly rules.");
         }
         return nullptr;
     }
     BKVCombatApi.store(api, std::memory_order_release);
-    DiagnosticLog(
-        "MeleeSplash: negotiated Reimagined Combat API v%u for optional "
-        "Critical/Deadly resolution.",
-        BKVCombatInterop::ApiVersion);
     return api;
 }
 
-auto ResolveCriticalForTarget(
+void ResolveCriticalForTarget(
         void* game,
         void* attacker,
         void* target,
         void* damage,
-        std::int32_t damageMode) noexcept -> CriticalResolution {
+        std::int32_t damageMode) noexcept {
     const auto* api = ResolveBKVCombatApi();
     if (BKVCombatInterop::HasActiveCriticalDeadlyResolver(api)) {
         const auto outcome = api->resolveCriticalDeadly(
@@ -1293,26 +1095,16 @@ auto ResolveCriticalForTarget(
             BKVCombatInterop::SyntheticSecondaryFlag);
         switch (outcome) {
         case BKVCombatInterop::CriticalDeadlyOutcome::None:
-            return {.outcome = "none", .resolver = "Reimagined Combat"};
         case BKVCombatInterop::CriticalDeadlyOutcome::Critical:
-            return {.outcome = "critical", .resolver = "Reimagined Combat"};
         case BKVCombatInterop::CriticalDeadlyOutcome::Deadly:
-            return {.outcome = "deadly", .resolver = "Reimagined Combat"};
         case BKVCombatInterop::CriticalDeadlyOutcome::AlreadyResolved:
-            return {.outcome = "alreadyResolved", .resolver = "Reimagined Combat"};
+            return;
         case BKVCombatInterop::CriticalDeadlyOutcome::Unavailable:
             break;
         }
-        DiagnosticLog(
-            "MeleeSplash: Reimagined Combat Critical/Deadly resolver became "
-            "unavailable; using the exact native 92777 fallback.");
     }
 
-    const auto native = RollCriticalForTarget(attacker, damage, damageMode);
-    return {
-        .outcome = CriticalOutcomeName(native),
-        .resolver = "native92777",
-    };
+    RollCriticalForTarget(attacker, damage, damageMode);
 }
 
 void PrepareSyntheticRecord(void* target, void* damage) noexcept {
@@ -1369,10 +1161,6 @@ auto CollectAreaCandidate(void* nativeContext, void* candidate) noexcept
         const auto candidateId = Identity(candidate);
         if (candidateId.type != UnitMonster) {
             RejectedTargets.fetch_add(1, std::memory_order_relaxed);
-            DiagnosticLog(
-                "MeleeSplash reject target=%d/%u reason=not-monster.",
-                candidateId.type,
-                candidateId.guid);
             return 0;
         }
         if (!AppendUniqueSecondaryTarget(
@@ -1381,16 +1169,6 @@ auto CollectAreaCandidate(void* nativeContext, void* candidate) noexcept
             collection->attacker,
             collection->primary)) {
             RejectedTargets.fetch_add(1, std::memory_order_relaxed);
-            const auto* reason = candidateId == collection->attacker
-                ? "attacker"
-                : (candidateId == collection->primary
-                    ? "primary"
-                    : "duplicate");
-            DiagnosticLog(
-                "MeleeSplash reject target=%d/%u reason=%s.",
-                candidateId.type,
-                candidateId.guid,
-                reason);
             return 0;
         }
         return 1;
@@ -1407,16 +1185,11 @@ auto CollectSecondaryTargets(
         std::int32_t radius) -> std::vector<UnitIdentity> {
     std::vector<UnitIdentity> targets;
     if (!game || !attacker || !primary || radius <= 0) {
-        DiagnosticLog("MeleeSplash reject area reason=invalid-origin-or-radius.");
         return targets;
     }
     auto* path = Read<void*>(primary, UnitPathOffset);
     auto* room = GetRoom(primary);
     if (!path || !room) {
-        DiagnosticLog(
-            "MeleeSplash reject area primary=%d/%u reason=missing-path-or-room.",
-            Identity(primary).type,
-            Identity(primary).guid);
         return targets;
     }
     AreaDescriptor descriptor{
@@ -1458,10 +1231,6 @@ bool ApplySplashToTarget(
     if (!target || Identity(target) != targetId
             || !CanDamageTarget(game, attacker, target)) {
         RejectedTargets.fetch_add(1, std::memory_order_relaxed);
-        DiagnosticLog(
-            "MeleeSplash reject target=%d/%u reason=unresolved-or-cannot-damage.",
-            targetId.type,
-            targetId.guid);
         return false;
     }
     auto damage = OwnedDamage::Copy(baseDamage.Get());
@@ -1469,13 +1238,9 @@ bool ApplySplashToTarget(
     PrepareSyntheticRecord(target, damage->Get());
     if (!ScaleOffensivePacket(damage->Get(), metadata.splashPercent)) {
         RejectedTargets.fetch_add(1, std::memory_order_relaxed);
-        DiagnosticLog(
-            "MeleeSplash reject target=%d/%u reason=invalid-poison-packet.",
-            targetId.type,
-            targetId.guid);
         return false;
     }
-    const auto critical = ResolveCriticalForTarget(
+    ResolveCriticalForTarget(
         game,
         attacker,
         target,
@@ -1483,83 +1248,36 @@ bool ApplySplashToTarget(
         metadata.damageMode);
     if (!ApplySecondaryConversion(attacker, damage->Get())) {
         RejectedTargets.fetch_add(1, std::memory_order_relaxed);
-        DiagnosticLog("MeleeSplash reject reason=unsupported-secondary-conversion.");
         return false;
     }
 
-    SecondaryDiagnostics diagnostics{};
-    std::int32_t normalLifeLeechPercent{};
-    std::int32_t normalManaLeechPercent{};
-    std::int32_t splashLifeLeechPercent{};
-    std::int32_t splashManaLeechPercent{};
     {
         SecondaryScope secondaryScope;
-        SecondaryDiagnosticsScope diagnosticsScope(&diagnostics);
         CalculateTotalDamage(game, attacker, target, damage->Get());
-        normalLifeLeechPercent = Read<std::int32_t>(
-            damage->Get(), DamageLifeLeechOffset);
-        normalManaLeechPercent = Read<std::int32_t>(
-            damage->Get(), DamageManaLeechOffset);
-        splashLifeLeechPercent = normalLifeLeechPercent / 2;
-        splashManaLeechPercent = normalManaLeechPercent / 2;
-        Write(damage->Get(), DamageLifeLeechOffset, splashLifeLeechPercent);
-        Write(damage->Get(), DamageManaLeechOffset, splashManaLeechPercent);
+        const auto lifeLeech = Read<std::int32_t>(damage->Get(), DamageLifeLeechOffset);
+        const auto manaLeech = Read<std::int32_t>(damage->Get(), DamageManaLeechOffset);
+        Write(damage->Get(), DamageLifeLeechOffset, lifeLeech / 2);
+        Write(damage->Get(), DamageManaLeechOffset, manaLeech / 2);
         UpdateWillDie(target, damage->Get());
         OriginalExecute(game, attacker, target, 0, damage->Get());
         FinalizeDamage(game, attacker, target, damage->Get());
     }
 
     SecondaryHits.fetch_add(1, std::memory_order_relaxed);
-    DiagnosticLog(
-        "MeleeSplash target=%d/%u crit=%s critResolver=%s phys=%d fire=%d "
-        "burn=%d lightning=%d "
-        "magic=%d cold=%d poison=%d postTotal=%d normalLifeLeechPct=%d "
-        "splashLifeLeechPct=%d nativeAdjustedLifeLeechPct=%d normalManaLeechPct=%d "
-        "splashManaLeechPct=%d nativeAdjustedManaLeechPct=%d "
-        "CBcalls=%u CBresult=%d OWcalls=%u OWresult=%d.",
-        targetId.type,
-        targetId.guid,
-        critical.outcome,
-        critical.resolver,
-        Read<std::int32_t>(damage->Get(), DamagePhysicalOffset),
-        Read<std::int32_t>(damage->Get(), DamageFireOffset),
-        Read<std::int32_t>(damage->Get(), DamageBurnOffset),
-        Read<std::int32_t>(damage->Get(), DamageLightningOffset),
-        Read<std::int32_t>(damage->Get(), DamageMagicOffset),
-        Read<std::int32_t>(damage->Get(), DamageColdOffset),
-        Read<std::int32_t>(damage->Get(), DamagePoisonOffset),
-        Read<std::int32_t>(damage->Get(), DamageTotalOffset),
-        normalLifeLeechPercent,
-        splashLifeLeechPercent,
-        Read<std::int32_t>(damage->Get(), DamageLifeLeechOffset),
-        normalManaLeechPercent,
-        splashManaLeechPercent,
-        Read<std::int32_t>(damage->Get(), DamageManaLeechOffset),
-        diagnostics.crushingBlowCalls,
-        diagnostics.lastCrushingBlowResult,
-        diagnostics.openWoundsCalls,
-        diagnostics.lastOpenWoundsResult);
     return true;
 }
 
 void TriggerSplash(PrimaryFrame& frame) noexcept {
     try {
         if (!frame.sidecar || !frame.sidecar->damage) {
-            DiagnosticLog("MeleeSplash reject hit reason=missing-sidecar-packet.");
             return;
         }
         if (!frame.primaryHitSucceeded) {
-            DiagnosticLog(
-                "MeleeSplash reject hit seq=%llu reason=primary-not-successful.",
-                static_cast<unsigned long long>(frame.sidecar->sequence));
             return;
         }
         if (frame.sidecar->metadata.gateRequired
                 && !frame.sidecar->metadata.gateSatisfied
                 && !frame.gateSeen) {
-            DiagnosticLog(
-                "MeleeSplash reject hit seq=%llu reason=gate-stat-absent.",
-                static_cast<unsigned long long>(frame.sidecar->sequence));
             return;
         }
         const auto& metadata = frame.sidecar->metadata;
@@ -1571,38 +1289,14 @@ void TriggerSplash(PrimaryFrame& frame) noexcept {
                 || Identity(attacker) != metadata.attacker
                 || Identity(primary) != metadata.primary) {
             RejectedHits.fetch_add(1, std::memory_order_relaxed);
-            DiagnosticLog(
-                "MeleeSplash reject hit seq=%llu reason=unit-reresolve-failed.",
-                static_cast<unsigned long long>(frame.sidecar->sequence));
             return;
         }
         auto targets = CollectSecondaryTargets(
             frame.game, attacker, primary, metadata.radiusTiles);
-        std::uint32_t applied{};
         for (const auto target : targets) {
-            if (ApplySplashToTarget(
-                    frame.game,
-                    attacker,
-                    metadata,
-                    *frame.sidecar->damage,
-                    target)) {
-                ++applied;
-            }
+            ApplySplashToTarget(frame.game, attacker, metadata, *frame.sidecar->damage, target);
         }
         Bursts.fetch_add(1, std::memory_order_relaxed);
-        DiagnosticLog(
-            "MeleeSplash burst seq=%llu attacker=%d/%u primary=%d/%u "
-            "radius=%d percent=%d candidates=%zu applied=%u recursionDepth=%u.",
-            static_cast<unsigned long long>(frame.sidecar->sequence),
-            metadata.attacker.type,
-            metadata.attacker.guid,
-            metadata.primary.type,
-            metadata.primary.guid,
-            metadata.radiusTiles,
-            metadata.splashPercent,
-            targets.size(),
-            applied,
-            SecondaryDepth);
     } catch (const std::exception& exception) {
         RejectedHits.fetch_add(1, std::memory_order_relaxed);
         if (Context) {
@@ -1674,57 +1368,14 @@ void __fastcall HookFill(
         std::uint8_t sourceDamage) noexcept {
     const auto returnRva = reinterpret_cast<std::uintptr_t>(_ReturnAddress())
         - reinterpret_cast<std::uintptr_t>(Base);
-    const auto attackerId = Identity(attacker);
-    const auto defenderId = Identity(defender);
-    if (Operational.load(std::memory_order_acquire) && SecondaryDepth != 0) {
-        DiagnosticLog(
-            "MeleeSplash recursion guard pass-through at Fill depth=%u.",
-            SecondaryDepth);
-    }
     if (!Operational.load(std::memory_order_acquire)
             || SecondaryDepth != 0
             || !IsSupportedMeleeFillReturn(returnRva)
             || !attacker || !defender || !damage
             || Identity(attacker).type != UnitPlayer
             || Identity(defender).type != UnitMonster) {
-        if (Operational.load(std::memory_order_acquire)
-                && SecondaryDepth == 0
-                && attacker && defender && damage
-                && attackerId.type == UnitPlayer
-                && defenderId.type == UnitMonster
-                && FillDiagnosticLines.fetch_add(
-                    1, std::memory_order_relaxed) < MaximumFillDiagnosticLines) {
-            DiagnosticLog(
-                "MeleeSplash Fill pass-through reason=%s returnRva=0x%llX "
-                "expectedDirect=0x%llX expectedQueued=0x%llX "
-                "attacker=%d/%u defender=%d/%u mode=%d.",
-                IsSupportedMeleeFillReturn(returnRva)
-                    ? "non-caller-guard" : "caller-mismatch",
-                static_cast<unsigned long long>(returnRva),
-                static_cast<unsigned long long>(DirectMeleeFillReturnRva),
-                static_cast<unsigned long long>(QueuedMeleeFillReturnRva),
-                attackerId.type,
-                attackerId.guid,
-                defenderId.type,
-                defenderId.guid,
-                mode);
-        }
         OriginalFill(game, attacker, defender, damage, mode, sourceDamage);
         return;
-    }
-
-    if (FillDiagnosticLines.fetch_add(
-            1, std::memory_order_relaxed) < MaximumFillDiagnosticLines) {
-        DiagnosticLog(
-            "MeleeSplash Fill candidate returnRva=0x%llX attacker=%d/%u "
-            "defender=%d/%u mode=%d damage=%p.",
-            static_cast<unsigned long long>(returnRva),
-            attackerId.type,
-            attackerId.guid,
-            defenderId.type,
-            defenderId.guid,
-            mode,
-            damage);
     }
 
     std::unique_ptr<CaptureMetadata> metadata;
@@ -1753,25 +1404,12 @@ void __fastcall HookFill(
     FillFrameScope scope(&frame);
     OriginalFill(game, attacker, defender, damage, mode, sourceDamage);
     try {
-        const auto captured = (frame.event3Seen || frame.preConversionSeen)
-            ? static_cast<bool>(frame.normalizedDamage)
-            : CaptureNormalizedPacket(frame, damage);
-        DiagnosticLog(
-            "MeleeSplash Fill result captured=%s event3=%s precritical=%s "
-            "gateSeen=%s preFlags=0x%04X lateFlags=0x%04X conversion=%u.",
-            captured ? "true" : "false",
-            frame.event3Seen ? "true" : "false",
-            frame.preCriticalSeen ? "true" : "false",
-            frame.gateSeen ? "true" : "false",
-            static_cast<unsigned>(frame.preCriticalFlags),
-            static_cast<unsigned>(Read<std::uint16_t>(
-                damage, DamageResultFlagsOffset)),
-            static_cast<unsigned>(Read<std::uint8_t>(
-                damage, DamageConversionTypeOffset)));
+        if (!frame.event3Seen && !frame.preConversionSeen) {
+            CaptureNormalizedPacket(frame, damage);
+        }
         PushPendingCapture(frame, std::move(metadata));
     } catch (...) {
         RejectedHits.fetch_add(1, std::memory_order_relaxed);
-        DiagnosticLog("MeleeSplash capture reject reason=exception.");
     }
 }
 
@@ -1783,7 +1421,6 @@ void CaptureBeforeConversion() noexcept {
         CaptureNormalizedPacket(*frame, frame->damage);
     } catch (...) {
         frame->sourceCaptureValid = false;
-        DiagnosticLog("MeleeSplash capture reject reason=preconversion-exception.");
     }
 }
 
@@ -1985,7 +1622,6 @@ void __fastcall HookExecute(
 
 std::int32_t __fastcall FilteredEvent(
         EventFunctionFn original,
-        const char* name,
         void* game,
         std::int32_t event,
         void* attacker,
@@ -1996,15 +1632,6 @@ std::int32_t __fastcall FilteredEvent(
         std::int32_t argument8,
         void* argument9) noexcept {
     if (Operational.load(std::memory_order_acquire) && SecondaryDepth != 0) {
-        DiagnosticLog(
-            "MeleeSplash filtered event=%s attacker=%d/%u target=%d/%u "
-            "recursionDepth=%u.",
-            name,
-            Identity(attacker).type,
-            Identity(attacker).guid,
-            Identity(target).type,
-            Identity(target).guid,
-            SecondaryDepth);
         return 0;
     }
     return original(
@@ -2025,7 +1652,7 @@ std::int32_t __fastcall FilteredEvent(
             void* damage, std::int32_t argument6, std::int32_t argument7, \
             std::int32_t argument8, void* argument9) noexcept { \
         return FilteredEvent( \
-            OriginalEvent##NUMBER, #NUMBER, game, event, attacker, target, \
+            OriginalEvent##NUMBER, game, event, attacker, target, \
             damage, argument6, argument7, argument8, argument9); \
     }
 
@@ -2036,48 +1663,6 @@ MELEE_SPLASH_FILTERED_EVENT(19)
 MELEE_SPLASH_FILTERED_EVENT(21)
 
 #undef MELEE_SPLASH_FILTERED_EVENT
-
-std::int32_t __fastcall HookEvent15(
-        void* game,
-        std::int32_t event,
-        void* attacker,
-        void* target,
-        void* damage,
-        std::int32_t argument6,
-        std::int32_t argument7,
-        std::int32_t argument8,
-        void* argument9) noexcept {
-    const auto result = OriginalEvent15(
-        game, event, attacker, target, damage,
-        argument6, argument7, argument8, argument9);
-    if (Operational.load(std::memory_order_acquire)
-            && SecondaryDepth != 0 && ActiveSecondaryDiagnostics) {
-        ++ActiveSecondaryDiagnostics->openWoundsCalls;
-        ActiveSecondaryDiagnostics->lastOpenWoundsResult = result;
-    }
-    return result;
-}
-
-std::int32_t __fastcall HookEvent16(
-        void* game,
-        std::int32_t event,
-        void* attacker,
-        void* target,
-        void* damage,
-        std::int32_t argument6,
-        std::int32_t argument7,
-        std::int32_t argument8,
-        void* argument9) noexcept {
-    const auto result = OriginalEvent16(
-        game, event, attacker, target, damage,
-        argument6, argument7, argument8, argument9);
-    if (Operational.load(std::memory_order_acquire)
-            && SecondaryDepth != 0 && ActiveSecondaryDiagnostics) {
-        ++ActiveSecondaryDiagnostics->crushingBlowCalls;
-        ActiveSecondaryDiagnostics->lastCrushingBlowResult = result;
-    }
-    return result;
-}
 
 std::int32_t __fastcall HookEvent20(
         void* game,
@@ -2095,12 +1680,6 @@ std::int32_t __fastcall HookEvent20(
             argument6, argument7, argument8, argument9);
     }
     if (SecondaryDepth != 0) {
-        DiagnosticLog(
-            "MeleeSplash filtered event=20 attacker=%d/%u target=%d/%u.",
-            Identity(attacker).type,
-            Identity(attacker).guid,
-            Identity(target).type,
-            Identity(target).guid);
         return 0;
     }
     const auto packed = static_cast<std::uint32_t>(argument6);
@@ -2128,9 +1707,6 @@ std::int32_t __fastcall HookEvent20(
         .enabled = true, .statId = verifiedStat, .layer = 0,
     };
     if (MatchesLegacyEvent20Suppression(suppression, packed, playerAttacker)) {
-        DiagnosticLog(
-            "MeleeSplash suppressed configured legacy Event20 token=0x%08X.",
-            packed);
         return 0;
     }
     return OriginalEvent20(
@@ -2201,8 +1777,6 @@ bool ValidateOwnedSites() noexcept {
         && CheckBytes(EventFunc7Rva, Event7Expected, "EventFunc7")
         && CheckBytes(EventFunc9Rva, Event9Expected, "EventFunc9")
         && CheckBytes(EventFunc14Rva, Event14Expected, "EventFunc14")
-        && CheckBytes(EventFunc15Rva, Event15Expected, "EventFunc15")
-        && CheckBytes(EventFunc16Rva, Event16Expected, "EventFunc16")
         && CheckBytes(EventFunc19Rva, Event19Expected, "EventFunc19")
         && CheckBytes(EventFunc20Rva, Event20Expected, "EventFunc20")
         && CheckBytes(EventFunc21Rva, Event21Expected, "EventFunc21")
@@ -2358,8 +1932,6 @@ bool InstallHooks() noexcept {
         && InstallInline(EventFunc7Rva, Event7Expected, HookEvent7, &OriginalEvent7)
         && InstallInline(EventFunc9Rva, Event9Expected, HookEvent9, &OriginalEvent9)
         && InstallInline(EventFunc14Rva, Event14Expected, HookEvent14, &OriginalEvent14)
-        && InstallInline(EventFunc15Rva, Event15Expected, HookEvent15, &OriginalEvent15)
-        && InstallInline(EventFunc16Rva, Event16Expected, HookEvent16, &OriginalEvent16)
         && InstallInline(EventFunc19Rva, Event19Expected, HookEvent19, &OriginalEvent19)
         && InstallInline(EventFunc20Rva, Event20Expected, HookEvent20, &OriginalEvent20)
         && InstallInline(EventFunc21Rva, Event21Expected, HookEvent21, &OriginalEvent21)
@@ -2557,7 +2129,6 @@ auto LoadSettings() -> bool {
         return false;
     }
     ActiveConfig.activationMode = skillSettings.activationMode;
-    ActiveConfig.diagnosticLogging = skillSettings.diagnosticLogging;
     ActiveConfig.baseRadiusNormalWeapon = skillSettings.normalWeaponRadiusTiles;
     ActiveConfig.baseRadiusExceptionalEliteWeapon =
         skillSettings.exceptionalEliteWeaponRadiusTiles;
@@ -2578,13 +2149,12 @@ auto LoadSettings() -> bool {
     char message[256]{};
     std::snprintf(message, sizeof(message),
         "MeleeSplash settings: mode=%s fixedSkillRows=%zu skillRadiusRows=%zu "
-        "radii=%d/%d diagnosticLogging=%s.",
+        "radii=%d/%d.",
         ActivationModeName(ActiveConfig.activationMode),
         skillSettings.fixedSplashDamagePercentBySkill.size(),
         skillSettings.radiusTilesBySkill.size(),
         ActiveConfig.baseRadiusNormalWeapon,
-        ActiveConfig.baseRadiusExceptionalEliteWeapon,
-        ActiveConfig.diagnosticLogging ? "on" : "off");
+        ActiveConfig.baseRadiusExceptionalEliteWeapon);
     Context->LogInfo(message);
     return true;
 }
@@ -2604,7 +2174,7 @@ auto Status(
         std::snprintf(
             message,
             sizeof(message),
-        "Melee Splash 1.3.9: enabled=%s operational=%s partial=%s config=%s "
+        "Melee Splash 1.4.0: enabled=%s operational=%s partial=%s config=%s "
             "verifiedStatIds(Classic/LoD/RotW)=%d/%d/%d "
             "captures=%llu bursts=%llu secondaryHits=%llu rejectedHits=%llu "
             "rejectedTargets=%llu droppedSidecars=%llu.",
@@ -2623,7 +2193,7 @@ auto Status(
         command->plugin->WriteConsoleMessage(message);
     } catch (...) {
         command->plugin->WriteConsoleMessage(
-            "Melee Splash 1.3.9: status unavailable (allocation failure).");
+            "Melee Splash 1.4.0: status unavailable (allocation failure).");
     }
     return D2RL::ConsoleCommandResult::Handled;
 }
@@ -2632,16 +2202,12 @@ void ResetState() noexcept {
     ClearMeleeSplashStatBindings();
     Operational.store(false, std::memory_order_release);
     AnyMutationInstalled.store(false, std::memory_order_release);
-    Sequence.store(0, std::memory_order_relaxed);
     Captures.store(0, std::memory_order_relaxed);
     Bursts.store(0, std::memory_order_relaxed);
     SecondaryHits.store(0, std::memory_order_relaxed);
     RejectedHits.store(0, std::memory_order_relaxed);
     RejectedTargets.store(0, std::memory_order_relaxed);
     DroppedSidecars.store(0, std::memory_order_relaxed);
-    FillDiagnosticLines.store(0, std::memory_order_relaxed);
-    SkillPolicyDiagnosticLines.store(0, std::memory_order_relaxed);
-    SkillInputDiagnosticLines.store(0, std::memory_order_relaxed);
     try {
         std::scoped_lock lock(SidecarMutex);
         Sidecars.clear();
@@ -2668,7 +2234,7 @@ constexpr D2RL::PluginInfo Info{
     .abiVersion = D2RL_PLUGIN_ABI_VERSION,
     .id = "d2rl-melee-splash",
     .name = "Melee Splash",
-    .version = "1.3.9",
+    .version = "1.4.0",
     .author = "MadMike",
     .description = "Adds configurable melee splash damage to nearby monsters.",
     .flags = D2RL::PluginFlags::Server
@@ -2703,7 +2269,7 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(
     }
     if (!ActiveConfig.enabled) {
         Context->LogInfo(
-            "Melee Splash 1.3.9 loaded disabled; no hooks installed.");
+            "Melee Splash 1.4.0 loaded disabled; no hooks installed.");
         if (!Context->RegisterConsoleCommand(
                 "melee-splash", Status, "Show Melee Splash status.")) {
             Context->LogWarn(
@@ -2750,13 +2316,13 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(
         std::snprintf(
             message,
             sizeof(message),
-            "Melee Splash 1.3.9 by MadMike active; item splash=%s config=%s.",
+            "Melee Splash 1.4.0 by MadMike active; item splash=%s config=%s.",
             watchingTables ? "awaiting loaded tables" : "disabled",
             path.c_str());
         Context->LogInfo(message);
     } catch (...) {
         Context->LogInfo(
-            "Melee Splash 1.3.9 by MadMike active; config path unavailable.");
+            "Melee Splash 1.4.0 by MadMike active; config path unavailable.");
     }
     return true;
 }

@@ -36,6 +36,7 @@ using Bytes = std::vector<std::uint8_t>;
 using Columns = std::map<std::string, std::size_t>;
 
 constexpr wchar_t InstallMutexName[] = L"Local\\D2RLoader.ModFirstRunInstall.v1";
+constexpr wchar_t SharedSetupDirectory[] = L"plugins/basefiles-and-backups";
 constexpr std::int32_t MaximumPropertyId = 65535;
 constexpr std::string_view StatName = MeleeSplashStatName;
 constexpr std::string_view PropertyName = "meleesplash";
@@ -106,8 +107,16 @@ auto PathText(fs::path path) -> std::string {
 	return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
 }
 
+auto Win32FilePath(const fs::path& path) -> fs::path {
+	// The shared backup folder adds depth even when the mod path itself is short.
+	auto absolute = fs::absolute(path).lexically_normal().make_preferred().native();
+	if (absolute.starts_with(L"\\\\?\\")) return fs::path(std::move(absolute));
+	if (absolute.starts_with(L"\\\\")) return fs::path(L"\\\\?\\UNC\\" + absolute.substr(2));
+	return fs::path(L"\\\\?\\" + absolute);
+}
+
 auto ReadFile(const fs::path& path) -> Bytes {
-	std::ifstream stream(path, std::ios::binary);
+	std::ifstream stream(Win32FilePath(path), std::ios::binary);
 	if (!stream) {
 		throw std::runtime_error("could not open " + PathText(path));
 	}
@@ -261,6 +270,9 @@ auto MapTemplateRow(
 	}
 	for (const auto& [name, value] : overrides) {
 		targetFields[RequireColumn(targetColumns, name)] = value;
+	}
+	if (const auto creator = targetColumns.find("*Creator"); creator != targetColumns.end()) {
+		targetFields[creator->second] = "MadMike";
 	}
 	return JoinTsv(targetFields);
 }
@@ -679,19 +691,13 @@ auto FindModPaths(const D2RL::PluginContext* context) -> ModPaths {
 	return {dataRoot, loaderRoot, configFile};
 }
 
-bool CheckRequiredFile(const D2RL::PluginContext& context, const fs::path& root, const fs::path& relative) {
-	const auto path = root / relative;
-	std::error_code error;
-	const auto status = fs::status(path, error);
-	if (fs::is_regular_file(status)) {
-		const auto resolved = fs::canonical(path, error);
-		if (!error && IsWithin(root, resolved) && !fs::is_symlink(fs::symlink_status(path))) return true;
+auto CheckedSetupPath(const fs::path& loaderRoot, const fs::path& relative) -> fs::path {
+	const auto path = (loaderRoot / relative).lexically_normal();
+	const auto resolved = fs::weakly_canonical(path);
+	if (!IsWithin(loaderRoot, resolved) || !SameName(path, resolved)) {
+		throw std::runtime_error("invalid setup path: " + PathText(path));
 	}
-	const auto message = std::string(status.type() == fs::file_type::not_found
-		? "Melee Splash: missing required file. Put it here: "
-		: "Melee Splash: expected a readable, loose file inside the mod here: ") + PathText(path);
-	context.LogError(message.c_str());
-	return false;
+	return path;
 }
 
 auto ReadModText(const fs::path& root, const fs::path& relative) -> std::string {
@@ -703,10 +709,28 @@ auto ReadModText(const fs::path& root, const fs::path& relative) -> std::string 
 	return ReadText(resolved);
 }
 
+auto ReadOptionalText(const fs::path& root, const fs::path& relative) -> std::optional<std::string> {
+	const auto path = root / relative;
+	if (!IsWithin(root, fs::weakly_canonical(path))) {
+		throw std::runtime_error("a setup file points outside its data folder: " + PathText(path));
+	}
+	const auto status = fs::symlink_status(path);
+	if (status.type() == fs::file_type::not_found) return std::nullopt;
+	if (!fs::is_regular_file(status)) {
+		throw std::runtime_error("expected a regular setup file: " + PathText(path));
+	}
+	return ReadModText(root, relative);
+}
+
 auto ReadLocalizationIds(const fs::path& root) -> std::set<std::uint32_t> {
 	const fs::path directory(L"data/local/lng/strings");
 	std::set<std::uint32_t> used;
-	for (const auto& file : fs::directory_iterator(root / directory)) {
+	const auto strings = root / directory;
+	if (!fs::exists(strings)) return used;
+	if (!IsWithin(root, fs::canonical(strings))) {
+		throw std::runtime_error("the localization directory points outside the mod: " + PathText(strings));
+	}
+	for (const auto& file : fs::directory_iterator(strings)) {
 		if (!SameName(file.path().extension(), L".json") || !file.is_regular_file()) continue;
 		try {
 			CollectLocalizationIds(ReadModText(root, directory / file.path().filename()), used);
@@ -741,16 +765,16 @@ auto Timestamp() -> std::wstring {
 }
 
 void WriteAtomic(const fs::path& target, std::string_view data, bool replaceExisting = true) {
-	fs::create_directories(target.parent_path());
-	auto temporary = target;
-	temporary += L".d2rl-melee-splash-" + std::to_wstring(GetCurrentProcessId())
-		+ L"-" + std::to_wstring(GetTickCount64()) + L".tmp";
+	fs::create_directories(Win32FilePath(target.parent_path()));
+	const auto temporary = Win32FilePath(target.parent_path() / (L".d2rl-melee-splash-"
+		+ std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64()) + L".tmp"));
+	const auto destination = Win32FilePath(target);
 	try {
 		std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
 		stream.write(data.data(), static_cast<std::streamsize>(data.size()));
 		stream.close();
 		const auto flags = MOVEFILE_WRITE_THROUGH | (replaceExisting ? MOVEFILE_REPLACE_EXISTING : 0);
-		if (!stream || !MoveFileExW(temporary.c_str(), target.c_str(), flags)) {
+		if (!stream || !MoveFileExW(temporary.c_str(), destination.c_str(), flags)) {
 			throw std::runtime_error("could not write " + PathText(target));
 		}
 	} catch (...) {
@@ -762,36 +786,45 @@ void WriteAtomic(const fs::path& target, std::string_view data, bool replaceExis
 
 struct Edit {
 	fs::path relative;
-	std::string before, after;
+	std::optional<std::string> before;
+	std::string after;
 };
 
-void ApplyEdits(const ModPaths& paths, const std::vector<Edit>& edits,
-		std::optional<std::string_view> initialConfig) {
+auto ApplyEdits(const ModPaths& paths, const std::vector<Edit>& edits,
+		std::optional<std::string_view> initialConfig) -> fs::path {
 	fs::path backupRoot;
 	if (!edits.empty()) {
-		backupRoot = fs::weakly_canonical(paths.loaderRoot / L"backups/d2rl-melee-splash" / Timestamp());
-		if (!IsWithin(paths.loaderRoot, backupRoot)) {
-			throw std::runtime_error("the backup path points outside the mod's loader folder");
+		backupRoot = CheckedSetupPath(paths.loaderRoot, fs::path(SharedSetupDirectory)
+			/ L"backups/d2rl-melee-splash" / Timestamp());
+		if (!fs::create_directories(backupRoot)) {
+			throw std::runtime_error("the install backup directory already exists: " + PathText(backupRoot));
 		}
+		std::string createdPaths;
 		for (const auto& edit : edits) {
-			const auto backup = backupRoot / edit.relative;
-			if (ReadModText(paths.dataRoot, edit.relative) != edit.before) {
+			if (ReadOptionalText(paths.dataRoot, edit.relative) != edit.before) {
 				throw std::runtime_error("a mod file changed during setup: " + PathText(paths.dataRoot / edit.relative));
 			}
-			WriteAtomic(backup, edit.before, false);
-			if (ReadText(backup) != edit.before) {
+			if (!edit.before) {
+				createdPaths += PathText(edit.relative) + '\n';
+				continue;
+			}
+			const auto backup = backupRoot / edit.relative;
+			WriteAtomic(backup, *edit.before, false);
+			if (ReadText(backup) != *edit.before) {
 				throw std::runtime_error("could not verify " + PathText(backup));
 			}
 		}
+		if (!createdPaths.empty()) WriteAtomic(backupRoot / L"created-files.txt", createdPaths, false);
 	}
 
 	std::size_t written = 0;
 	try {
 		for (const auto& edit : edits) {
-			if (ReadModText(paths.dataRoot, edit.relative) != edit.before) {
-				throw std::runtime_error("a mod file changed during setup: " + PathText(paths.dataRoot / edit.relative));
+			const auto target = paths.dataRoot / edit.relative;
+			if (ReadOptionalText(paths.dataRoot, edit.relative) != edit.before) {
+				throw std::runtime_error("a mod file changed during setup: " + PathText(target));
 			}
-			WriteAtomic(paths.dataRoot / edit.relative, edit.after);
+			WriteAtomic(target, edit.after, edit.before.has_value());
 			++written;
 		}
 		if (initialConfig.has_value()) WriteAtomic(paths.configFile, *initialConfig, false);
@@ -800,17 +833,25 @@ void ApplyEdits(const ModPaths& paths, const std::vector<Edit>& edits,
 		while (written != 0) {
 			const auto& edit = edits[--written];
 			try {
-				if (ReadModText(paths.dataRoot, edit.relative) != edit.after) restored = false;
-				else WriteAtomic(paths.dataRoot / edit.relative, edit.before);
+				const auto target = paths.dataRoot / edit.relative;
+				const auto current = ReadOptionalText(paths.dataRoot, edit.relative);
+				if (!current || *current != edit.after) {
+					restored = false;
+				} else if (edit.before) {
+					WriteAtomic(target, *edit.before);
+				} else if (!fs::remove(target)) {
+					restored = false;
+				}
 			} catch (...) {
 				restored = false;
 			}
 		}
 		if (!restored) {
-			throw std::runtime_error("could not restore every edited file; original files are in " + PathText(backupRoot));
+			throw std::runtime_error("could not restore every edited file; see the install backup at " + PathText(backupRoot));
 		}
 		throw;
 	}
+	return backupRoot;
 }
 
 constexpr std::string_view DefaultConfig =
@@ -822,8 +863,6 @@ constexpr std::string_view DefaultConfig =
 		"# Default radius by weapon tier, in tiles. Exceptional and elite weapons share one value.\n"
 		"normal_weapon_radius_tiles = 4\n"
 		"exceptional_elite_weapon_radius_tiles = 5\n"
-		"# Detailed combat logs can slow down play. Enable only while troubleshooting.\n"
-		"diagnostic_logging = false\n"
 		"\n[melee_splash.skills]\n"
 		"# Keys accept names from the active Skills.txt skill column or numeric *Id. Names are case-insensitive.\n"
 		"# Names resolve against active mod data; numeric keys refer to literal IDs. Quote names with spaces.\n"
@@ -852,17 +891,33 @@ auto Install(const D2RL::PluginContext& context) -> FirstRunResult {
 		return {};
 	}
 
-	bool haveAll = true;
-	for (const auto* relative : RequiredFiles) {
-		haveAll &= CheckRequiredFile(context, paths.dataRoot, relative);
-	}
-	if (!haveAll) return {};
-
 	enum Target : std::size_t { ItemStatCost, Properties, MagicSuffix, ModifierStrings, AffixStrings };
 	std::array<std::string, RequiredFiles.size()> original;
+	std::array<bool, RequiredFiles.size()> existed{};
+	std::optional<fs::path> baseRoot;
+	bool haveAll = true;
 	for (std::size_t i = 0; i < original.size(); ++i) {
-		original[i] = ReadModText(paths.dataRoot, RequiredFiles[i]);
+		const fs::path relative(RequiredFiles[i]);
+		if (auto loose = ReadOptionalText(paths.dataRoot, relative)) {
+			original[i] = std::move(*loose);
+			existed[i] = true;
+			continue;
+		}
+		if (!baseRoot) {
+			baseRoot = CheckedSetupPath(paths.loaderRoot, fs::path(SharedSetupDirectory) / L"basefiles");
+		}
+		// The shared folder mirrors the contents of CASC's data directory.
+		const auto baseRelative = relative.lexically_relative(L"data");
+		if (auto base = ReadOptionalText(*baseRoot, baseRelative)) {
+			original[i] = std::move(*base);
+		} else {
+			const auto message = "Melee Splash: missing required file " + PathText(paths.dataRoot / relative)
+				+ ". Put an extracted CASC copy here: " + PathText(*baseRoot / baseRelative);
+			context.LogError(message.c_str());
+			haveAll = false;
+		}
 	}
+	if (!haveAll) return {};
 
 	auto stat = MergeItemStatCost(original[ItemStatCost]);
 	auto properties = MergeProperties(original[Properties]);
@@ -878,7 +933,13 @@ auto Install(const D2RL::PluginContext& context) -> FirstRunResult {
 		&& !modifierKeys.contains(std::string(ModifierStringKey));
 	const bool addAffix = suffix.affixKeys.contains(std::string(SuffixName))
 		&& !affixKeys.contains(std::string(SuffixName));
-	auto usedIds = addModifier || addAffix ? ReadLocalizationIds(paths.dataRoot) : std::set<std::uint32_t>{};
+	std::set<std::uint32_t> usedIds;
+	if (addModifier || addAffix) {
+		usedIds = ReadLocalizationIds(paths.dataRoot);
+		// A fallback JSON is not on disk in the mod yet, but its IDs will be loaded.
+		if (!existed[ModifierStrings]) CollectLocalizationIds(original[ModifierStrings], usedIds);
+		if (!existed[AffixStrings]) CollectLocalizationIds(original[AffixStrings], usedIds);
+	}
 	auto modifiers = addModifier
 		? MergeLocalizedJson(original[ModifierStrings], IDR_MELEESPLASH_ITEM_MODIFIER_STRING, ModifierStringKey, usedIds)
 		: original[ModifierStrings];
@@ -889,8 +950,9 @@ auto Install(const D2RL::PluginContext& context) -> FirstRunResult {
 	// Compare the actual files, including previously staged and customized installs.
 	std::vector<Edit> edits;
 	const auto queue = [&](Target target, std::string text) {
-		if (original[target] != text) {
-			edits.push_back({RequiredFiles[target], std::move(original[target]), std::move(text)});
+		if (!existed[target] || original[target] != text) {
+			auto before = existed[target] ? std::optional<std::string>(std::move(original[target])) : std::nullopt;
+			edits.push_back({RequiredFiles[target], std::move(before), std::move(text)});
 		}
 	};
 	queue(ItemStatCost, std::move(stat.text));
@@ -906,10 +968,12 @@ auto Install(const D2RL::PluginContext& context) -> FirstRunResult {
 	} else if (!fs::is_regular_file(configStatus)) {
 		throw std::runtime_error("the plugin configuration is not a regular file: " + PathText(paths.configFile));
 	}
-	ApplyEdits(paths, edits, initialConfig);
+	const auto backupRoot = ApplyEdits(paths, edits, initialConfig);
 
 	if (!edits.empty()) {
 		context.LogInfo("Melee Splash: first-run install complete. Restart D2RLoader to load the splash data.");
+		const auto message = "Melee Splash: install backup: " + PathText(backupRoot);
+		context.LogInfo(message.c_str());
 	} else {
 		context.LogInfo("Melee Splash: existing installation found; reusing its mod data.");
 	}

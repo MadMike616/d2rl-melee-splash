@@ -52,7 +52,6 @@ struct SkillSplashSettings {
 	ActivationMode activationMode{ActivationMode::AllEligibleMelee};
 	std::int32_t normalWeaponRadiusTiles{4};
 	std::int32_t exceptionalEliteWeaponRadiusTiles{5};
-	bool diagnosticLogging{};
 	std::map<std::int32_t, std::int32_t> fixedSplashDamagePercentBySkill;
 	std::map<std::int32_t, std::int32_t> radiusTilesBySkill;
 };
@@ -292,16 +291,6 @@ inline bool ParseSkillSplashSettings(
 				}
 				continue;
 			}
-			if (key == "diagnostic_logging") {
-				if (value == "true") settings.diagnosticLogging = true;
-				else if (value == "false") settings.diagnosticLogging = false;
-				else {
-					error = "diagnostic_logging on line " + std::to_string(lineNumber)
-						+ " must be true or false";
-					return false;
-				}
-				continue;
-			}
 			if (key != "normal_weapon_radius_tiles"
 					&& key != "exceptional_elite_weapon_radius_tiles") continue;
 			std::int32_t radiusTiles{};
@@ -394,7 +383,6 @@ struct Config {
 	std::int32_t baseRadiusNormalWeapon{4};
 	std::int32_t baseRadiusExceptionalEliteWeapon{5};
 	std::int32_t maximumRadiusTiles{};
-	bool diagnosticLogging{};
 	std::map<std::int32_t, SkillOverride> skillOverrides;
 	bool requireCharmTier{};
 	std::vector<CharmTier> charmTiers;

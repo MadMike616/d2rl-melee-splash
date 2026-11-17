@@ -6,16 +6,16 @@
 |---|---|
 | Plugin name | Melee Splash |
 | Plugin ID | d2rl-melee-splash |
-| Release version | 1.3.9 |
-| Inventory updated | 2026-11-15 |
-| Source revision | v1.3.9 release source |
-| D2R build(s) audited | D2R 3.4.95032 with D2RLoader 1.3.1-beta (normal melee and item splash) |
+| Release version | Unreleased |
+| Inventory updated | 2026-11-17 |
+| Source revision | v1.4.0 source |
+| D2R build(s) audited | D2R 3.4.95032 with D2RLoader 1.3.1-beta (v1.3.9 gameplay baseline; v1.4.0 source audited) |
 | D2RLoader SDK / Plugin ABI | PluginSDK 0.4.0 / Plugin ABI 4 |
 | Audit status | Partial |
 
 ## Scope and method
 
-Inspected src/plugin.cpp, src/pre_conversion.asm, src/stat_lookup.cpp, and the installer. This inventory covers plugin-owned inline detours and call-site patches. Hook sites are unchanged from v0.3.7. The loaded-table listener in src/stat_lookup.cpp reads the active ItemStatCost tables, checks the stat name and record ID, and installs no native hooks or patches.
+Inspected src/plugin.cpp, src/pre_conversion.asm, src/stat_lookup.cpp, and the installer. This inventory covers plugin-owned inline detours and call-site patches. The two trace-only hooks on EventFunc15 and EventFunc16 were removed after v1.3.9. All remaining hook and patch sites are unchanged. The loaded-table listener in src/stat_lookup.cpp reads the active ItemStatCost tables, checks the stat name and record ID, and installs no native hooks or patches.
 
 All addresses are RVAs relative to the D2R executable module base and are written in hexadecimal. The plugin checks expected instruction bytes and structural witnesses before patching. Inline hooks use SDK InstallInlineHook; call-site redirects encode a rel32 CALL to a nearby relay and apply it through expected-byte-checked PatchBytes. Physical-conversion and source-roll call patches are conditional on configuration; skill-input hooks are native executable inline hooks, not OS input hooks.
 
@@ -30,8 +30,6 @@ All addresses are RVAs relative to the D2R executable module base and are writte
 | H-05 | Inline | EventFunc7 | RVA 0x583E00 | InstallInlineHook to HookEvent7 | Event7Expected bytes checked before mutation and by the SDK hook install | src/plugin.cpp — ValidateOwnedSites / InstallHooks | Installed when plugin is enabled. |
 | H-06 | Inline | EventFunc9 | RVA 0x583400 | InstallInlineHook to HookEvent9 | Event9Expected bytes checked before mutation and by the SDK hook install | src/plugin.cpp — ValidateOwnedSites / InstallHooks | Installed when plugin is enabled. |
 | H-07 | Inline | EventFunc14 | RVA 0x583580 | InstallInlineHook to HookEvent14 | Event14Expected bytes checked before mutation and by the SDK hook install | src/plugin.cpp — ValidateOwnedSites / InstallHooks | Installed when plugin is enabled. |
-| H-08 | Inline | EventFunc15 | RVA 0x584170 | InstallInlineHook to HookEvent15 | Event15Expected bytes checked before mutation and by the SDK hook install | src/plugin.cpp — ValidateOwnedSites / InstallHooks | Same entry also hooked by RuffDood Cast Triggers in the current workspace inventory. |
-| H-09 | Inline | EventFunc16 | RVA 0x583150 | InstallInlineHook to HookEvent16 | Event16Expected bytes checked before mutation and by the SDK hook install | src/plugin.cpp — ValidateOwnedSites / InstallHooks | Same entry also hooked by RuffDood Cast Triggers in the current workspace inventory. |
 | H-10 | Inline | EventFunc19 | RVA 0x5849D0 | InstallInlineHook to HookEvent19 | Event19Expected bytes checked before mutation and by the SDK hook install | src/plugin.cpp — ValidateOwnedSites / InstallHooks | Installed when plugin is enabled. |
 | H-11 | Inline | EventFunc20 | RVA 0x583B30 | InstallInlineHook to HookEvent20 | Event20Expected bytes checked before mutation and by the SDK hook install | src/plugin.cpp — ValidateOwnedSites / InstallHooks | Same entry also hooked by RuffDood Cast Triggers in the current workspace inventory. |
 | H-12 | Inline | EventFunc21 | RVA 0x5837F0 | InstallInlineHook to HookEvent21 | Event21Expected bytes checked before mutation and by the SDK hook install | src/plugin.cpp — ValidateOwnedSites / InstallHooks | Installed when plugin is enabled. |
@@ -50,10 +48,8 @@ All addresses are RVAs relative to the D2R executable module base and are writte
 
 | Other plugin | Shared target | Relationship | Evidence / notes |
 |---|---|---|---|
-| RuffDood Cast Triggers | EventFunc15, RVA 0x584170 | Same inline entry | Source directory plugins/cast-triggers; listed in the workspace aggregate inventory. |
-| RuffDood Cast Triggers | EventFunc16, RVA 0x583150 | Same inline entry | Source directory plugins/cast-triggers; listed in the workspace aggregate inventory. |
 | RuffDood Cast Triggers | EventFunc20, RVA 0x583B30 | Same inline entry | Source directory plugins/cast-triggers; listed in the workspace aggregate inventory. |
 
 ## Audit notes
 
-The active skill layout and direct melee fill context are validation sites. The stat lookup also checks native accessor and linker bytes before reading loaded tables. The source contains no vtable hooks or OS input/message hooks. The user verified combat with a moved stat and combat logging disabled on the audited build; other builds and every optional skill path were not tested.
+The active skill layout and direct melee fill context are validation sites. The stat lookup also checks native accessor and linker bytes before reading loaded tables. The source contains no vtable hooks or OS input/message hooks. The user verified combat with a moved stat and combat logging disabled in v1.3.9. Version 1.4.0 has not been retested in-game.
