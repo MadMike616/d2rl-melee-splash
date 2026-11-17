@@ -13,9 +13,8 @@ D2RLoader plugin that adds configurable melee splash damage to Diablo II: Resurr
 
 ## Install
 
-These instructions apply to the current source. If you downloaded a
-published DLL, use the installation instructions for that version on the
-[Releases page](https://github.com/MadMike616/d2rl-melee-splash/releases).
+Download the DLL from [GitHub Releases](https://github.com/MadMike616/d2rl-melee-splash/releases).
+The install steps below apply to v1.4.0 and later.
 
 You need D2RLoader with Plugin ABI 4 support and an unpacked, writable mod.
 Melee Splash v1.3.9 was tested with D2R 3.4.95032 and D2RLoader 1.3.1-beta.

@@ -6,9 +6,9 @@
 |---|---|
 | Plugin name | Melee Splash |
 | Plugin ID | d2rl-melee-splash |
-| Release version | Unreleased |
+| Release version | 1.4.0 |
 | Inventory updated | 2026-11-17 |
-| Source revision | v1.4.0 source |
+| Source revision | v1.4.0 release source |
 | D2R build(s) audited | D2R 3.4.95032 with D2RLoader 1.3.1-beta (v1.3.9 gameplay baseline; v1.4.0 source audited) |
 | D2RLoader SDK / Plugin ABI | PluginSDK 0.4.0 / Plugin ABI 4 |
 | Audit status | Partial |
