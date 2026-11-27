@@ -6,9 +6,9 @@
 |---|---|
 | Plugin name | Melee Splash |
 | Plugin ID | d2rl-melee-splash |
-| Release version | 1.4.0 |
-| Inventory updated | 2026-11-17 |
-| Source revision | v1.4.0 release source |
+| Release version | 1.4.2 |
+| Inventory updated | 2026-11-27 |
+| Source revision | v1.4.2 release source |
 | D2R build(s) audited | D2R 3.4.95032 with D2RLoader 1.3.1-beta (v1.3.9 gameplay baseline; v1.4.0 source audited) |
 | D2RLoader SDK / Plugin ABI | PluginSDK 0.4.0 / Plugin ABI 4 |
 | Audit status | Partial |
@@ -53,3 +53,5 @@ All addresses are RVAs relative to the D2R executable module base and are writte
 ## Audit notes
 
 The active skill layout and direct melee fill context are validation sites. The stat lookup also checks native accessor and linker bytes before reading loaded tables. The source contains no vtable hooks or OS input/message hooks. The user verified combat with a moved stat and combat logging disabled in v1.3.9. Version 1.4.0 has not been retested in-game.
+
+Release 1.4.2 source review: TOML installation completion and configuration mirroring add no native hook, patch, vtable, or OS input-hook targets. Hook-site changes since the previous release: none. Startup completion was checked in the testing environment; the existing native validation limits above still apply.

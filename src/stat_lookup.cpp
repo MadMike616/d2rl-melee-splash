@@ -168,10 +168,6 @@ void __cdecl OnDataTablesLoaded(const D2RL::PluginContext* context,
         char message[224]{};
         if (result.status == StatLookupStatus::Found) {
             BankStatIds[i].store(result.id, std::memory_order_release);
-            std::snprintf(message, sizeof(message),
-                "Melee Splash: verified loaded %s item_melee_splash stat_id=%d (loose table ID=%d).",
-                bankNames[i], result.id, LooseStatHint);
-            context->LogInfo(message);
         } else {
             const char* reason = result.status == StatLookupStatus::Missing ? "stat is absent"
                 : result.status == StatLookupStatus::Ambiguous ? "duplicate stat name"

@@ -1,3 +1,4 @@
+#include "install_token.hpp"
 #include "melee_splash_installer.h"
 #include "melee_splash_stat_lookup.hpp"
 #include "install_resource_ids.h"
@@ -186,18 +187,22 @@ auto JoinTsv(const std::vector<std::string>& fields) -> std::string {
 	return result;
 }
 
-auto ParseHeader(std::string_view line) -> std::vector<std::string> {
+auto ParseHeader(std::string_view line, std::string_view table, std::string_view headerKind)
+		-> std::vector<std::string> {
 	auto header = SplitTsv(line);
 	if (!header.empty() && header.front().starts_with("\xEF\xBB\xBF")) {
 		header.front().erase(0, 3);
 	}
-	while (!header.empty() && header.back().empty()) {
-		header.pop_back();
-	}
 	std::set<std::string> names;
-	for (const auto& name : header) {
-		if (name.empty() || !names.insert(name).second) {
-			throw std::runtime_error("a text table has an empty or duplicate column name");
+	for (std::size_t i = 0; i < header.size(); ++i) {
+		const auto& name = header[i];
+		if (name.find_first_not_of(" \t\r\n") == std::string::npos) {
+			throw std::runtime_error(std::string(table) + ": empty column name at column "
+				+ std::to_string(i + 1) + " in the " + std::string(headerKind) + " header");
+		}
+		if (!names.insert(name).second) {
+			throw std::runtime_error(std::string(table) + ": duplicate column '" + name
+				+ "' in the " + std::string(headerKind) + " header");
 		}
 	}
 	return header;
@@ -211,10 +216,12 @@ auto MakeColumns(const std::vector<std::string>& header) -> Columns {
 	return columns;
 }
 
-auto RequireColumn(const Columns& columns, std::string_view name) -> std::size_t {
+auto RequireColumn(const Columns& columns, std::string_view name, std::string_view table,
+		std::string_view headerKind = "active") -> std::size_t {
 	const auto found = columns.find(std::string(name));
 	if (found == columns.end()) {
-		throw std::runtime_error("a text table is missing a required column");
+		throw std::runtime_error(std::string(table) + ": required column '" + std::string(name)
+			+ "' is missing from the " + std::string(headerKind) + " header");
 	}
 	return found->second;
 }
@@ -249,6 +256,7 @@ auto ChooseFreeId(const std::set<std::int32_t>& used, std::int32_t preferred, st
 }
 
 auto MapTemplateRow(
+		std::string_view table,
 		const std::vector<std::string>& sourceHeader,
 		std::string_view sourceRow,
 		const std::vector<std::string>& targetHeader,
@@ -257,19 +265,23 @@ auto MapTemplateRow(
 	const auto sourceColumns = MakeColumns(sourceHeader);
 	const auto targetColumns = MakeColumns(targetHeader);
 	for (const auto& name : requiredColumns) {
-		(void)RequireColumn(sourceColumns, name);
-		(void)RequireColumn(targetColumns, name);
+		(void)RequireColumn(sourceColumns, name, table, "template");
+		(void)RequireColumn(targetColumns, name, table);
 	}
-	auto sourceFields = NormalizeTsvFields(sourceRow, sourceHeader.size());
+	const auto sourceFields = NormalizeTsvFields(sourceRow, sourceHeader.size());
 	std::vector<std::string> targetFields(targetHeader.size());
 	for (std::size_t i = 0; i < sourceHeader.size(); ++i) {
-		const auto target = targetColumns.find(sourceHeader[i]);
+		const auto& name = sourceHeader[i];
+		const auto target = targetColumns.find(name);
 		if (target != targetColumns.end()) {
 			targetFields[target->second] = sourceFields[i];
+		} else if (name != "*Creator" && !sourceFields[i].empty()) {
+			throw std::runtime_error(std::string(table) + ": populated template column '" + name
+				+ "' is missing from the active header");
 		}
 	}
 	for (const auto& [name, value] : overrides) {
-		targetFields[RequireColumn(targetColumns, name)] = value;
+		targetFields[RequireColumn(targetColumns, name, table)] = value;
 	}
 	if (const auto creator = targetColumns.find("*Creator"); creator != targetColumns.end()) {
 		targetFields[creator->second] = "MadMike";
@@ -278,16 +290,17 @@ auto MapTemplateRow(
 }
 
 auto BuildResourceRow(
+		std::string_view table,
 		int resourceId,
 		const std::vector<std::string>& targetHeader,
 		const std::map<std::string, std::string>& overrides,
 		const std::vector<std::string>& requiredColumns) -> std::string {
 	const auto sourceLines = SplitLines(BytesToString(ResourceBytes(resourceId)));
-	if (sourceLines.size() < 2) {
-		throw std::runtime_error("an embedded text-table template is incomplete");
+	if (sourceLines.size() != 2) {
+		throw std::runtime_error(std::string(table) + ": the template must contain one header and one row");
 	}
-	const auto sourceHeader = ParseHeader(sourceLines[0]);
-	return MapTemplateRow(sourceHeader, sourceLines[1], targetHeader, overrides, requiredColumns);
+	const auto sourceHeader = ParseHeader(sourceLines.front(), table, "template");
+	return MapTemplateRow(table, sourceHeader, sourceLines[1], targetHeader, overrides, requiredColumns);
 }
 
 auto AppendRows(std::string_view existing, const std::vector<std::string>& rows) -> std::string {
@@ -313,16 +326,17 @@ struct StatMerge {
 };
 
 auto MergeItemStatCost(std::string_view existing) -> StatMerge {
+	constexpr std::string_view table = "itemstatcost.txt";
 	const auto lines = SplitLines(existing);
 	if (lines.empty()) {
 		throw std::runtime_error("itemstatcost.txt is empty");
 	}
-	const auto header = ParseHeader(lines.front());
+	const auto header = ParseHeader(lines.front(), table, "active");
 	const auto columns = MakeColumns(header);
-	const auto statColumn = RequireColumn(columns, "Stat");
-	const auto idColumn = RequireColumn(columns, "*ID");
-	const auto positiveStringColumn = RequireColumn(columns, "descstrpos");
-	const auto negativeStringColumn = RequireColumn(columns, "descstrneg");
+	const auto statColumn = RequireColumn(columns, "Stat", table);
+	const auto idColumn = RequireColumn(columns, "*ID", table);
+	const auto positiveStringColumn = RequireColumn(columns, "descstrpos", table);
+	const auto negativeStringColumn = RequireColumn(columns, "descstrneg", table);
 	std::set<std::int32_t> usedIds;
 	std::set<std::int32_t> duplicateIds;
 	std::optional<std::int32_t> statId;
@@ -352,7 +366,7 @@ auto MergeItemStatCost(std::string_view existing) -> StatMerge {
 	}
 
 	const auto selectedId = ChooseFreeId(usedIds, 398, MaximumMeleeSplashStatId);
-	const auto row = BuildResourceRow(
+	const auto row = BuildResourceRow(table,
 		IDR_MELEESPLASH_ITEMSTATCOST, header,
 		{{"Stat", std::string(StatName)}, {"*ID", std::to_string(selectedId)},
 		 {"descstrpos", std::string(ModifierStringKey)}, {"descstrneg", std::string(ModifierStringKey)}},
@@ -361,15 +375,16 @@ auto MergeItemStatCost(std::string_view existing) -> StatMerge {
 }
 
 auto MergeProperties(std::string_view existing) -> std::string {
+	constexpr std::string_view table = "properties.txt";
 	const auto lines = SplitLines(existing);
 	if (lines.empty()) {
 		throw std::runtime_error("properties.txt is empty");
 	}
-	const auto header = ParseHeader(lines.front());
+	const auto header = ParseHeader(lines.front(), table, "active");
 	const auto columns = MakeColumns(header);
-	const auto codeColumn = RequireColumn(columns, "code");
-	const auto idColumn = RequireColumn(columns, "*Id");
-	const auto statColumn = RequireColumn(columns, "stat1");
+	const auto codeColumn = RequireColumn(columns, "code", table);
+	const auto idColumn = RequireColumn(columns, "*Id", table);
+	const auto statColumn = RequireColumn(columns, "stat1", table);
 	std::set<std::int32_t> usedIds;
 	std::set<std::int32_t> duplicateIds;
 	std::optional<std::int32_t> propertyId;
@@ -397,7 +412,7 @@ auto MergeProperties(std::string_view existing) -> std::string {
 		return std::string(existing);
 	}
 	const auto selectedId = ChooseFreeId(usedIds, 314, MaximumPropertyId);
-	const auto row = BuildResourceRow(
+	const auto row = BuildResourceRow(table,
 		IDR_MELEESPLASH_PROPERTIES, header,
 		{{"code", std::string(PropertyName)}, {"*Id", std::to_string(selectedId)},
 		 {"stat1", std::string(StatName)}},
@@ -411,32 +426,34 @@ struct SuffixMerge {
 };
 
 auto MergeMagicSuffix(std::string_view existing) -> SuffixMerge {
+	constexpr std::string_view table = "magicsuffix.txt";
 	const auto lines = SplitLines(existing);
 	if (lines.empty()) {
 		throw std::runtime_error("magicsuffix.txt is empty");
 	}
-	const auto header = ParseHeader(lines.front());
+	const auto header = ParseHeader(lines.front(), table, "active");
 	const auto columns = MakeColumns(header);
-	const auto nameColumn = RequireColumn(columns, "Name");
-	const auto typeColumn = RequireColumn(columns, "itype1");
-	const auto propertyColumn = RequireColumn(columns, "mod1code");
+	const auto nameColumn = RequireColumn(columns, "Name", table);
+	const auto typeColumn = RequireColumn(columns, "itype1", table);
+	const auto propertyColumn = RequireColumn(columns, "mod1code", table);
 	const auto sourceLines = SplitLines(BytesToString(ResourceBytes(IDR_MELEESPLASH_MAGICSUFFIX)));
 	if (sourceLines.size() != 4) {
 		throw std::runtime_error("the embedded charm suffix template must have three rows");
 	}
-	const auto sourceHeader = ParseHeader(sourceLines.front());
+	const auto sourceHeader = ParseHeader(sourceLines.front(), table, "template");
+	const auto sourceColumns = MakeColumns(sourceHeader);
+	(void)RequireColumn(sourceColumns, "Name", table, "template");
+	const auto sourceTypeColumn = RequireColumn(sourceColumns, "itype1", table, "template");
 	std::vector<std::string> missing;
 	std::set<std::string> affixKeys;
 	for (std::size_t templateIndex = 1; templateIndex < sourceLines.size(); ++templateIndex) {
-		const auto mapped = MapTemplateRow(
-			sourceHeader, sourceLines[templateIndex], header, {},
-			{"Name", "itype1", "mod1code", "mod1min", "mod1max"});
-		const auto expected = NormalizeTsvFields(mapped, header.size());
+		const auto& sourceRow = sourceLines[templateIndex];
+		const auto source = NormalizeTsvFields(sourceRow, sourceHeader.size());
 		bool found = false;
 		bool conflictingName = false;
 		for (std::size_t i = 1; i < lines.size(); ++i) {
 			const auto fields = NormalizeTsvFields(lines[i], header.size());
-			if (fields[typeColumn] != expected[typeColumn]) continue;
+			if (fields[typeColumn] != source[sourceTypeColumn]) continue;
 			if (fields[propertyColumn] == PropertyName) {
 				if (fields[nameColumn].empty()) throw std::runtime_error("a melee-splash charm suffix has no name");
 				affixKeys.insert(fields[nameColumn]);
@@ -449,7 +466,8 @@ auto MergeMagicSuffix(std::string_view existing) -> SuffixMerge {
 			if (conflictingName) {
 				throw std::runtime_error("magicsuffix.txt has a conflicting of Splashing charm row");
 			}
-			missing.push_back(mapped);
+			missing.push_back(MapTemplateRow(table, sourceHeader, sourceRow, header, {},
+				{"Name", "itype1", "mod1code", "mod1min", "mod1max"}));
 			affixKeys.emplace(SuffixName);
 		}
 	}
@@ -884,6 +902,25 @@ constexpr std::string_view DefaultConfig =
 auto Install(const D2RL::PluginContext& context) -> FirstRunResult {
 	const auto paths = FindModPaths(&context);
 	FirstRunInstallLock installLock;
+    // Older releases wrote a complete token without schema_version. Validate
+    // their existing data once before recording the current schema.
+    const auto tokenText = InstallToken::Read(paths.configFile).value_or("");
+    const bool legacyToken =
+        InstallToken::Value(tokenText, "installation", "complete") == std::optional<std::string>("true")
+        && !InstallToken::Value(tokenText, "installation", "schema_version")
+        && InstallToken::Value(tokenText, "installation", "plugin_version").has_value()
+        && InstallToken::Value(tokenText, "installation", "stat_id").has_value()
+        && InstallToken::Value(tokenText, "installation", "property_id").has_value();
+    if (!legacyToken && InstallToken::Complete(context)) {
+        const auto stored=InstallToken::Get(context,"stat_id");
+        std::int32_t id=-1;
+        if (!stored) throw std::runtime_error("Completed installation has no stat_id");
+        const auto parsed=std::from_chars(stored->data(),stored->data()+stored->size(),id);
+        if (parsed.ec!=std::errc{} || parsed.ptr!=stored->data()+stored->size()
+                || id<0 || id>MaximumMeleeSplashStatId)
+            throw std::runtime_error("Invalid installed stat_id; set installation.complete = false to retry");
+        return {id,false};
+    }
 	if (fs::is_regular_file(paths.dataRoot)) {
 		const auto message = "Melee Splash: unpack the mod before setup; its data package is a file: "
 			+ PathText(paths.dataRoot);
@@ -969,6 +1006,7 @@ auto Install(const D2RL::PluginContext& context) -> FirstRunResult {
 		throw std::runtime_error("the plugin configuration is not a regular file: " + PathText(paths.configFile));
 	}
 	const auto backupRoot = ApplyEdits(paths, edits, initialConfig);
+    InstallToken::Commit(context, {{"stat_id",std::to_string(stat.id)}});
 
 	if (!edits.empty()) {
 		context.LogInfo("Melee Splash: first-run install complete. Restart D2RLoader to load the splash data.");

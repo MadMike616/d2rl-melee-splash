@@ -9,7 +9,7 @@ if "%~1"=="" (
 set "ROOT=%~dp0"
 set "SRC=%ROOT%src"
 set "SDK_INCLUDE=%~1\include"
-set "OUT=%TEMP%\d2rl-melee-splash-build-1.4.0"
+set "OUT=%TEMP%\d2rl-melee-splash-build-1.4.2"
 if not "%~2"=="" set "OUT=%~f2"
 
 if not exist "%SDK_INCLUDE%\D2RLPlugin\api.h" (

@@ -2146,16 +2146,6 @@ auto LoadSettings() -> bool {
         ? std::filesystem::path(Context->pluginConfigPath)
         : std::filesystem::path("d2rl-melee-splash.toml");
 
-    char message[256]{};
-    std::snprintf(message, sizeof(message),
-        "MeleeSplash settings: mode=%s fixedSkillRows=%zu skillRadiusRows=%zu "
-        "radii=%d/%d.",
-        ActivationModeName(ActiveConfig.activationMode),
-        skillSettings.fixedSplashDamagePercentBySkill.size(),
-        skillSettings.radiusTilesBySkill.size(),
-        ActiveConfig.baseRadiusNormalWeapon,
-        ActiveConfig.baseRadiusExceptionalEliteWeapon);
-    Context->LogInfo(message);
     return true;
 }
 
@@ -2174,7 +2164,7 @@ auto Status(
         std::snprintf(
             message,
             sizeof(message),
-        "Melee Splash 1.4.0: enabled=%s operational=%s partial=%s config=%s "
+        "Melee Splash 1.4.2: enabled=%s operational=%s partial=%s config=%s "
             "verifiedStatIds(Classic/LoD/RotW)=%d/%d/%d "
             "captures=%llu bursts=%llu secondaryHits=%llu rejectedHits=%llu "
             "rejectedTargets=%llu droppedSidecars=%llu.",
@@ -2193,7 +2183,7 @@ auto Status(
         command->plugin->WriteConsoleMessage(message);
     } catch (...) {
         command->plugin->WriteConsoleMessage(
-            "Melee Splash 1.4.0: status unavailable (allocation failure).");
+            "Melee Splash 1.4.2: status unavailable (allocation failure).");
     }
     return D2RL::ConsoleCommandResult::Handled;
 }
@@ -2234,7 +2224,7 @@ constexpr D2RL::PluginInfo Info{
     .abiVersion = D2RL_PLUGIN_ABI_VERSION,
     .id = "d2rl-melee-splash",
     .name = "Melee Splash",
-    .version = "1.4.0",
+    .version = "1.4.2",
     .author = "MadMike",
     .description = "Adds configurable melee splash damage to nearby monsters.",
     .flags = D2RL::PluginFlags::Server
@@ -2269,7 +2259,7 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(
     }
     if (!ActiveConfig.enabled) {
         Context->LogInfo(
-            "Melee Splash 1.4.0 loaded disabled; no hooks installed.");
+            "Melee Splash 1.4.2 loaded disabled; no hooks installed.");
         if (!Context->RegisterConsoleCommand(
                 "melee-splash", Status, "Show Melee Splash status.")) {
             Context->LogWarn(
@@ -2316,13 +2306,13 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(
         std::snprintf(
             message,
             sizeof(message),
-            "Melee Splash 1.4.0 by MadMike active; item splash=%s config=%s.",
+            "Melee Splash 1.4.2 by MadMike active; item splash=%s config=%s.",
             watchingTables ? "awaiting loaded tables" : "disabled",
             path.c_str());
         Context->LogInfo(message);
     } catch (...) {
         Context->LogInfo(
-            "Melee Splash 1.4.0 by MadMike active; config path unavailable.");
+            "Melee Splash 1.4.2 by MadMike active; config path unavailable.");
     }
     return true;
 }

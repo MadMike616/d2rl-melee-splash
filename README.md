@@ -51,6 +51,10 @@ into the matching folders under the new `basefiles/` directory.
 The DLL contains the rows and translations it merges. It prefers stat ID
 398 and property ID 314 and selects unused IDs when those are taken. It
 checks the mod's loose localization files before assigning string IDs.
+When adding table rows, setup matches columns by exact name. If either
+header is invalid or a populated template column is missing in the mod,
+setup logs the table and column and stops before changing the mod files.
+New rows set `*Creator` to `MadMike` when that column exists.
 The charm suffixes roll 1–3% on small charms, 2–6% on large charms, and
 3–9% on grand charms. Mod authors can assign `meleesplash` to other
 items in their own item tables.
@@ -127,3 +131,12 @@ Use D2RLoader PluginSDK 0.4.0 / Plugin ABI 4, Windows x64, and an x64 Visual Stu
 ## Third-party source
 
 The native damage-packet capture and secondary-hit implementation adapts RuffnecKk's `MeleeSplash` source, with explicit permission from the original coder. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for attribution. The expected-byte signatures for skill input hooks were verified against RuffDood's D2RLoader Suite; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+
+## Installation completion
+
+After successful first-run setup, the plugin records a completion token in its TOML configuration. Later launches skip that completed setup and preserve existing files and settings. Failed setup remains retryable.
+
+An existing legacy completion marker is validated and upgraded once. The token also preserves the installed splash stat ID.
+
+To rerun setup intentionally, close the game and set `complete = false` in the relevant token section (`[installation]` by default).
